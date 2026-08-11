@@ -10,8 +10,8 @@ Build a transparent hum removal plugin suitable for both live monitoring and stu
 
 ## Roadmap
 
-- [ ] Project setup
-- [ ] Audio pass-through
+- [X] Project setup
+- [X] Audio pass-through
 - [ ] Hum generator
 - [ ] Learn mode
 - [ ] Fixed harmonic subtraction
