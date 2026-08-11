@@ -2,60 +2,113 @@
 
 #include <JuceHeader.h>
 
+#include <atomic>
+
+namespace ParameterIDs
+{
+
+inline constexpr auto gain = "gain";
+
+}
+
 class HumbugAudioProcessor final : public juce::AudioProcessor
 {
+
 public:
-    HumbugAudioProcessor();
-    ~HumbugAudioProcessor() override = default;
 
-    void prepareToPlay(
-        double sampleRate,
-        int samplesPerBlock
-    ) override;
+HumbugAudioProcessor();
 
-    void releaseResources() override;
+~HumbugAudioProcessor() override = default;
 
-    bool isBusesLayoutSupported(
-        const BusesLayout& layouts
-    ) const override;
+void prepareToPlay(
 
-    void processBlock(
-        juce::AudioBuffer<float>& buffer,
-        juce::MidiBuffer& midiMessages
-    ) override;
+double sampleRate,
 
-    juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override;
+int samplesPerBlock
 
-    const juce::String getName() const override;
+) override;
 
-    bool acceptsMidi() const override;
-    bool producesMidi() const override;
-    bool isMidiEffect() const override;
+void releaseResources() override;
 
-    double getTailLengthSeconds() const override;
+bool isBusesLayoutSupported(
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override;
-    void setCurrentProgram(int index) override;
+const BusesLayout& layouts
 
-    const juce::String getProgramName(int index) override;
-    void changeProgramName(
-        int index,
-        const juce::String& newName
-    ) override;
+) const override;
 
-    void getStateInformation(
-        juce::MemoryBlock& destinationData
-    ) override;
+void processBlock(
 
-    void setStateInformation(
-        const void* data,
-        int sizeInBytes
-    ) override;
+juce::AudioBuffer<float>& buffer,
+
+juce::MidiBuffer& midiMessages
+
+) override;
+
+juce::AudioProcessorEditor* createEditor() override;
+
+bool hasEditor() const override;
+
+const juce::String getName() const override;
+
+bool acceptsMidi() const override;
+
+bool producesMidi() const override;
+
+bool isMidiEffect() const override;
+
+double getTailLengthSeconds() const override;
+
+int getNumPrograms() override;
+
+int getCurrentProgram() override;
+
+void setCurrentProgram(int index) override;
+
+const juce::String getProgramName(int index) override;
+
+void changeProgramName(
+
+int index,
+
+const juce::String& newName
+
+) override;
+
+void getStateInformation(
+
+juce::MemoryBlock& destinationData
+
+) override;
+
+void setStateInformation(
+
+const void* data,
+
+int sizeInBytes
+
+) override;
+
+juce::AudioProcessorValueTreeState&
+getParameterState() noexcept;
+
+const juce::AudioProcessorValueTreeState&
+getParameterState() const noexcept;
 
 private:
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
-        HumbugAudioProcessor
-    )
+
+static juce::AudioProcessorValueTreeState::ParameterLayout
+createParameterLayout();
+
+juce::AudioProcessorValueTreeState parameterState;
+
+std::atomic<float>* gainParameter = nullptr;
+
+juce::dsp::Gain<float> gainProcessor;
+
+JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
+
+HumbugAudioProcessor
+
+)
+
 };
