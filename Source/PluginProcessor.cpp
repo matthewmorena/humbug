@@ -50,17 +50,23 @@ HumbugAudioProcessor::createParameterLayout()
 
 void HumbugAudioProcessor::prepareToPlay(
     double sampleRate,
-    int samplesPerBlock)
+    int samplesPerBlock
+)
 {
-    const juce::dsp::ProcessSpec processSpec{
+    const juce::dsp::ProcessSpec processSpec {
         sampleRate,
         static_cast<juce::uint32>(samplesPerBlock),
         static_cast<juce::uint32>(
-            getTotalNumOutputChannels())};
+            getTotalNumOutputChannels()
+        )
+    };
+
+    gainProcessor.setGainDecibels(
+        gainParameter->load()
+    );
+
     gainProcessor.prepare(processSpec);
     gainProcessor.setRampDurationSeconds(0.02);
-    gainProcessor.setGainDecibels(
-        gainParameter->load());
 }
 
 void HumbugAudioProcessor::releaseResources()

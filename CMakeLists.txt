@@ -74,6 +74,7 @@ juce_generate_juce_header(HumbugTests)
 target_sources(HumbugTests
     PRIVATE
         Tests/TestMain.cpp
+        Tests/GainProcessorTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
