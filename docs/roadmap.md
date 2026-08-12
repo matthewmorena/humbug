@@ -4,7 +4,7 @@
 
 - [x] Project setup
 - [x] Audio pass-through
-- [ ] Gain processor
+- [x] Gain processor
 - [ ] Hum generator
 - [ ] Learn mode
 - [ ] Fixed harmonic subtraction
