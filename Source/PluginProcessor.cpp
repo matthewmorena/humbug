@@ -190,16 +190,43 @@ void HumbugAudioProcessor::changeProgramName(
 }
 
 void HumbugAudioProcessor::getStateInformation(
-    juce::MemoryBlock &destinationData)
+    juce::MemoryBlock& destinationData
+)
 {
-    juce::ignoreUnused(destinationData);
+    const auto state = parameterState.copyState();
+    const auto xml = state.createXml();
+    if (xml != nullptr)
+    {
+        copyXmlToBinary(
+            *xml,
+            destinationData
+        );
+    }
 }
 
 void HumbugAudioProcessor::setStateInformation(
-    const void *data,
-    int sizeInBytes)
+    const void* data,
+    int sizeInBytes
+)
 {
-    juce::ignoreUnused(data, sizeInBytes);
+    const auto xml = getXmlFromBinary(
+        data,
+        sizeInBytes
+    );
+
+    if (xml == nullptr)
+        return;
+
+    if (!xml->hasTagName(parameterState.state.getType()))
+        return;
+
+    const auto state =
+        juce::ValueTree::fromXml(*xml);
+
+    if (!state.isValid())
+        return;
+
+    parameterState.replaceState(state);
 }
 
 juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter()
