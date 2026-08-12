@@ -20,7 +20,7 @@ HumbugAudioProcessorEditor::HumbugAudioProcessorEditor(
     );
 
     statusLabel.setText(
-        "Audio pass-through",
+        "Gain processor",
         juce::dontSendNotification
     );
 
@@ -28,8 +28,46 @@ HumbugAudioProcessorEditor::HumbugAudioProcessorEditor(
         juce::Justification::centred
     );
 
+    gainSlider.setSliderStyle(
+        juce::Slider::RotaryHorizontalVerticalDrag
+    );
+
+    gainSlider.setTextBoxStyle(
+        juce::Slider::TextBoxBelow,
+        false,
+        80,
+        24
+    );
+
+    gainSlider.setTextValueSuffix(" dB");
+
+    gainSlider.setDoubleClickReturnValue(
+        true,
+        0.0
+    );
+
+    gainLabel.setText(
+        "Gain",
+        juce::dontSendNotification
+    );
+
+    gainLabel.setJustificationType(
+        juce::Justification::centred
+    );
+
     addAndMakeVisible(titleLabel);
     addAndMakeVisible(statusLabel);
+
+    addAndMakeVisible(gainSlider);
+    addAndMakeVisible(gainLabel);
+
+    gainAttachment = std::make_unique<
+        juce::AudioProcessorValueTreeState::SliderAttachment
+    >(
+        audioProcessor.getParameterState(),
+        ParameterIDs::gain,
+        gainSlider
+    );
 
     setSize(500, 300);
 }
@@ -63,10 +101,23 @@ void HumbugAudioProcessorEditor::resized()
     auto bounds = getLocalBounds().reduced(24);
 
     titleLabel.setBounds(
-        bounds.removeFromTop(70)
+        bounds.removeFromTop(60)
     );
 
     statusLabel.setBounds(
-        bounds.removeFromTop(40)
+        bounds.removeFromTop(30)
     );
+
+    bounds.removeFromTop(10);
+
+    auto gainArea = bounds.withSizeKeepingCentre(
+        140,
+        150
+    );
+
+    gainLabel.setBounds(
+        gainArea.removeFromTop(24)
+    );
+
+    gainSlider.setBounds(gainArea);
 }
