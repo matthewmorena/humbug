@@ -62,3 +62,46 @@ target_link_libraries(Humbug
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+enable_testing()
+
+juce_add_console_app(HumbugTests
+    PRODUCT_NAME "Humbug Tests"
+)
+
+juce_generate_juce_header(HumbugTests)
+
+target_sources(HumbugTests
+    PRIVATE
+        Tests/TestMain.cpp
+        Tests/GainProcessorTests.cpp
+
+        Source/PluginProcessor.cpp
+        Source/PluginProcessor.h
+        Source/PluginEditor.cpp
+        Source/PluginEditor.h
+)
+
+target_compile_definitions(HumbugTests
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JucePlugin_Name="Humbug"
+)
+
+target_link_libraries(HumbugTests
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+add_test(
+    NAME HumbugTests
+    COMMAND HumbugTests
+)
