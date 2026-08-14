@@ -1,3 +1,70 @@
 #pragma once
 
-class Oscillator {};
+#include <cmath>
+#include <numbers>
+
+class Oscillator
+{
+public:
+    void prepare(double newSampleRate) noexcept
+    {
+        sampleRate = newSampleRate;
+        updatePhaseIncrement();
+    }
+
+    void setFrequency(double newFrequencyHz) noexcept
+    {
+        frequencyHz = newFrequencyHz;
+        updatePhaseIncrement();
+    }
+
+    void reset(double newPhase = 0.0) noexcept
+    {
+        phase = newPhase;
+
+        while (phase >= 1.0)
+            phase -= 1.0;
+
+        while (phase < 0.0)
+            phase += 1.0;
+    }
+
+    float processSample() noexcept
+    {
+        const auto sample = static_cast<float>(
+            std::sin(
+                2.0
+                * std::numbers::pi
+                * phase
+            )
+        );
+
+        phase += phaseIncrement;
+
+        if (phase >= 1.0)
+            phase -= 1.0;
+
+        return sample;
+    }
+
+private:
+    void updatePhaseIncrement() noexcept
+    {
+        if (sampleRate > 0.0)
+            phaseIncrement = frequencyHz / sampleRate;
+        else
+            phaseIncrement = 0.0;
+    }
+
+    double sampleRate = 0.0;
+    double frequencyHz = 0.0;
+
+    // Normalized phase:
+    // 0.0 = 0 degrees
+    // 0.25 = 90 degrees
+    // 0.5 = 180 degrees
+    // 0.75 = 270 degrees
+    double phase = 0.0;
+
+    double phaseIncrement = 0.0;
+};
