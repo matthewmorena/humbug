@@ -75,6 +75,11 @@ target_sources(HumbugTests
     PRIVATE
         Tests/TestMain.cpp
         Tests/GainProcessorTests.cpp
+        Tests/OscillatorTests.cpp
+        Tests/HumGeneratorTests.cpp
+        Tests/HumEstimatorTests.cpp
+        Tests/ProcessorIntegrationTests.cpp
+        Tests/LinearSystemSolverTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h

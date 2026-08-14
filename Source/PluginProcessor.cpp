@@ -67,6 +67,31 @@ void HumbugAudioProcessor::prepareToPlay(
 
     gainProcessor.prepare(processSpec);
     gainProcessor.setRampDurationSeconds(0.02);
+
+    /* Preparing the hum generator */
+    humGenerator.prepare(sampleRate);
+
+    humGenerator.setFundamentalFrequency(60.0);
+
+    humGenerator.clearHarmonics();
+
+    humGenerator.setHarmonicAmplitude(1, 0.05f);
+    humGenerator.setHarmonicPhase(1, 0.13);
+
+    humGenerator.setHarmonicAmplitude(2, 0.02f);
+    humGenerator.setHarmonicPhase(2, 0.37);
+
+    humGenerator.setHarmonicAmplitude(3, 0.01f);
+    humGenerator.setHarmonicPhase(3, 0.71);
+
+    humGenerator.reset();
+}
+
+void HumbugAudioProcessor::setSyntheticHumEnabled(
+    bool shouldBeEnabled
+) noexcept
+{
+    syntheticHumEnabled = shouldBeEnabled;
 }
 
 void HumbugAudioProcessor::releaseResources()
@@ -94,10 +119,13 @@ void HumbugAudioProcessor::processBlock(
 {
     juce::ScopedNoDenormals noDenormals;
     juce::ignoreUnused(midiMessages);
+
     const auto totalInputChannels =
         getTotalNumInputChannels();
+
     const auto totalOutputChannels =
         getTotalNumOutputChannels();
+
     for (
         auto channel = totalInputChannels;
         channel < totalOutputChannels;
@@ -108,13 +136,20 @@ void HumbugAudioProcessor::processBlock(
             0,
             buffer.getNumSamples());
     }
+
+    if (syntheticHumEnabled)
+        humGenerator.addToBuffer(buffer);
+
     gainProcessor.setGainDecibels(
         gainParameter->load());
+
     auto audioBlock =
         juce::dsp::AudioBlock<float>(buffer);
+
     auto context =
         juce::dsp::ProcessContextReplacing<float>(
             audioBlock);
+
     gainProcessor.process(context);
 }
 

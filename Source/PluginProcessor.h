@@ -4,6 +4,8 @@
 
 #include <atomic>
 
+#include "DSP/HumGenerator.h"
+
 namespace ParameterIDs
 {
 
@@ -88,6 +90,8 @@ int sizeInBytes
 
 ) override;
 
+void setSyntheticHumEnabled(bool shouldBeEnabled) noexcept;
+
 juce::AudioProcessorValueTreeState&
 getParameterState() noexcept;
 
@@ -103,7 +107,10 @@ juce::AudioProcessorValueTreeState parameterState;
 
 std::atomic<float>* gainParameter = nullptr;
 
+HumGenerator humGenerator;
 juce::dsp::Gain<float> gainProcessor;
+
+bool syntheticHumEnabled = false;
 
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
 
