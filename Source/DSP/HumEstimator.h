@@ -2,6 +2,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include "LinearSystemSolver.h"
+
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -11,6 +13,8 @@ class HumEstimator
 {
 public:
     static constexpr std::size_t maxHarmonics = 8;
+
+    static constexpr std::size_t numCoefficients = maxHarmonics * 2;
 
     struct HarmonicEstimate
     {
@@ -40,7 +44,7 @@ public:
         if (
             channel < 0
             || channel >= buffer.getNumChannels()
-            || buffer.getNumSamples() <= 0
+            || buffer.getNumSamples() < static_cast<int>(numCoefficients)
             || sampleRate <= 0.0
             || fundamentalFrequencyHz <= 0.0
         )
@@ -48,15 +52,10 @@ public:
             return result;
         }
 
-        const auto* samples =
-            buffer.getReadPointer(channel);
-
-        const auto numSamples =
-            buffer.getNumSamples();
-
         constexpr auto twoPi =
             2.0 * std::numbers::pi;
 
+        // Fill in the frequency metadata first.
         for (
             std::size_t harmonicIndex = 0;
             harmonicIndex < maxHarmonics;
@@ -68,62 +67,142 @@ public:
                     harmonicIndex + 1
                 );
 
-            const auto frequencyHz =
+            result[harmonicIndex].frequencyHz =
                 fundamentalFrequencyHz
                 * harmonicNumber;
+        }
 
-            auto& harmonic =
-                result[harmonicIndex];
+        // For now, require all configured harmonics
+        // to fall below Nyquist.
+        if (
+            result[maxHarmonics - 1].frequencyHz
+            >= sampleRate * 0.5
+        )
+        {
+            return result;
+        }
 
-            harmonic.frequencyHz =
-                frequencyHz;
+        Matrix<numCoefficients> normalMatrix {};
+        Vector<numCoefficients> rightHandSide {};
 
-            // Don't attempt to estimate frequencies
-            // at or above Nyquist.
-            if (frequencyHz >= sampleRate * 0.5)
-                continue;
+        const auto* samples =
+            buffer.getReadPointer(channel);
 
-            const auto phaseIncrement =
-                twoPi
-                * frequencyHz
-                / sampleRate;
+        const auto numSamples =
+            buffer.getNumSamples();
 
-            double sineCorrelation = 0.0;
-            double cosineCorrelation = 0.0;
+        const auto fundamentalPhaseIncrement =
+            twoPi
+            * fundamentalFrequencyHz
+            / sampleRate;
 
-            double angle = 0.0;
+        for (
+            int sample = 0;
+            sample < numSamples;
+            ++sample
+        )
+        {
+            Vector<numCoefficients> basis {};
 
+            const auto fundamentalAngle =
+                fundamentalPhaseIncrement
+                * static_cast<double>(sample);
+
+            // Construct one row of A.
             for (
-                int sample = 0;
-                sample < numSamples;
-                ++sample
+                std::size_t harmonicIndex = 0;
+                harmonicIndex < maxHarmonics;
+                ++harmonicIndex
             )
             {
-                const auto value =
+                const auto harmonicNumber =
                     static_cast<double>(
-                        samples[sample]
+                        harmonicIndex + 1
                     );
 
-                sineCorrelation +=
-                    value * std::sin(angle);
+                const auto angle =
+                    fundamentalAngle
+                    * harmonicNumber;
 
-                cosineCorrelation +=
-                    value * std::cos(angle);
+                const auto sineIndex =
+                    harmonicIndex * 2;
 
-                angle += phaseIncrement;
+                const auto cosineIndex =
+                    sineIndex + 1;
+
+                basis[sineIndex] =
+                    std::sin(angle);
+
+                basis[cosineIndex] =
+                    std::cos(angle);
             }
 
-            const auto scale =
-                2.0
-                / static_cast<double>(
-                    numSamples
+            const auto inputSample =
+                static_cast<double>(
+                    samples[sample]
                 );
 
+            // Accumulate A^T x.
+            for (
+                std::size_t row = 0;
+                row < numCoefficients;
+                ++row
+            )
+            {
+                rightHandSide[row] +=
+                    basis[row]
+                    * inputSample;
+            }
+
+            // Accumulate A^T A.
+            for (
+                std::size_t row = 0;
+                row < numCoefficients;
+                ++row
+            )
+            {
+                for (
+                    std::size_t column = 0;
+                    column < numCoefficients;
+                    ++column
+                )
+                {
+                    normalMatrix[row][column] +=
+                        basis[row]
+                        * basis[column];
+                }
+            }
+        }
+
+        Vector<numCoefficients> coefficients {};
+
+        const auto solved =
+            solveLinearSystem(
+                normalMatrix,
+                rightHandSide,
+                coefficients
+            );
+
+        if (!solved)
+            return result;
+
+        // Convert sine/cosine coefficients back
+        // into amplitude and normalized phase.
+        for (
+            std::size_t harmonicIndex = 0;
+            harmonicIndex < maxHarmonics;
+            ++harmonicIndex
+        )
+        {
             const auto sineCoefficient =
-                sineCorrelation * scale;
+                coefficients[
+                    harmonicIndex * 2
+                ];
 
             const auto cosineCoefficient =
-                cosineCorrelation * scale;
+                coefficients[
+                    harmonicIndex * 2 + 1
+                ];
 
             const auto amplitude =
                 std::sqrt(
@@ -142,12 +221,12 @@ public:
             if (phaseRadians < 0.0)
                 phaseRadians += twoPi;
 
-            harmonic.amplitude =
+            result[harmonicIndex].amplitude =
                 static_cast<float>(
                     amplitude
                 );
 
-            harmonic.phase =
+            result[harmonicIndex].phase =
                 phaseRadians / twoPi;
         }
 
