@@ -18,6 +18,10 @@ public:
         testFiftyHzFundamental();
         testHarmonicPhase();
         testReset();
+
+        testAddsHumToExistingAudio();
+        testStereoChannelsRemainPhaseAligned();
+        testPhaseAdvancesOncePerSampleFrame();
     }
 
 private:
@@ -190,6 +194,151 @@ private:
         expectWithinAbsoluteError(
             generator.processSample(),
             0.0f,
+            0.0001f
+        );
+    }
+
+    void testAddsHumToExistingAudio()
+    {
+        beginTest(
+            "Hum is added to existing audio"
+        );
+
+        HumGenerator generator;
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.5f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.25
+        );
+
+        juce::AudioBuffer<float> buffer(2, 1);
+
+        buffer.setSample(0, 0, 0.25f);
+        buffer.setSample(1, 0, -0.25f);
+
+        generator.addToBuffer(buffer);
+
+        expectWithinAbsoluteError(
+            buffer.getSample(0, 0),
+            0.75f,
+            0.0001f
+        );
+
+        expectWithinAbsoluteError(
+            buffer.getSample(1, 0),
+            0.25f,
+            0.0001f
+        );
+    }
+
+    void testStereoChannelsRemainPhaseAligned()
+    {
+        beginTest(
+            "Stereo channels receive identical hum"
+        );
+
+        HumGenerator generator;
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.4f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.2f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.17
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.63
+        );
+
+        constexpr int numSamples = 512;
+
+        juce::AudioBuffer<float> buffer(
+            2,
+            numSamples
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        float maximumDifference = 0.0f;
+
+        for (
+            int sample = 0;
+            sample < numSamples;
+            ++sample
+        )
+        {
+            maximumDifference = std::max(
+                maximumDifference,
+                std::abs(
+                    buffer.getSample(0, sample)
+                    - buffer.getSample(1, sample)
+                )
+            );
+        }
+
+        expectWithinAbsoluteError(
+            maximumDifference,
+            0.0f,
+            0.000001f
+        );
+    }
+
+    void testPhaseAdvancesOncePerSampleFrame()
+    {
+        beginTest(
+            "Stereo processing advances phase once per sample frame"
+        );
+
+        HumGenerator generator;
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            1.0f
+        );
+
+        // 60 Hz at 48 kHz requires 200 samples
+        // to reach one quarter of a cycle.
+        constexpr int quarterCycleSamples = 200;
+
+        juce::AudioBuffer<float> buffer(
+            2,
+            quarterCycleSamples
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        // Exactly 200 oscillator samples should have
+        // elapsed regardless of the two output channels.
+        expectWithinAbsoluteError(
+            generator.processSample(),
+            1.0f,
             0.0001f
         );
     }

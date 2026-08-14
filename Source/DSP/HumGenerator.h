@@ -5,6 +5,8 @@
 #include <array>
 #include <cstddef>
 
+#include <juce_audio_basics/juce_audio_basics.h>
+
 class HumGenerator
 {
 public:
@@ -94,6 +96,35 @@ public:
         }
 
         return output;
+    }
+
+    void addToBuffer(
+        juce::AudioBuffer<float>& buffer
+    ) noexcept
+    {
+        const auto numChannels =
+            buffer.getNumChannels();
+
+        const auto numSamples =
+            buffer.getNumSamples();
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const auto humSample = processSample();
+
+            for (
+                int channel = 0;
+                channel < numChannels;
+                ++channel
+            )
+            {
+                buffer.addSample(
+                    channel,
+                    sample,
+                    humSample
+                );
+            }
+        }
     }
 
 private:
