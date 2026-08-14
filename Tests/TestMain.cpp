@@ -16,7 +16,7 @@ int main()
     ConsoleUnitTestRunner runner;
 
     runner.setAssertOnFailure(false);
-    runner.setPassesAreLogged(true);
+    runner.setPassesAreLogged(false);
 
     runner.runAllTests();
 
