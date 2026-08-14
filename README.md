@@ -2,7 +2,7 @@
 
 > Adaptive mains hum removal for guitar.
 
-Humbug is a JUCE-based VST3/AU plugin that aims to remove 50/60 Hz mains hum from guitars—especially single-coil and P-90 pickups—using adaptive sinusoidal estimation rather than traditional notch filters or noise gates.
+Humbug is a JUCE-based audio plugin that aims to remove 50/60 Hz mains hum from guitars—especially single-coil and P-90 pickups—using adaptive sinusoidal estimation rather than traditional notch filters or noise gates.
 
 ## Vision
 
