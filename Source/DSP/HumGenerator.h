@@ -56,6 +56,23 @@ public:
             amplitude;
     }
 
+    void setHarmonicPhase(
+        std::size_t harmonicNumber,
+        double phase
+    ) noexcept
+    {
+        if (
+            harmonicNumber == 0
+            || harmonicNumber > maxHarmonics
+        )
+        {
+            return;
+        }
+
+        oscillators[harmonicNumber - 1]
+            .setPhase(phase);
+    }
+
     void clearHarmonics() noexcept
     {
         harmonicAmplitudes.fill(0.0f);

@@ -18,15 +18,26 @@ public:
         updatePhaseIncrement();
     }
 
-    void reset(double newPhase = 0.0) noexcept
+    void setPhase(double newPhase) noexcept
     {
-        phase = newPhase;
+        initialPhase = wrapPhase(newPhase);
+        phase = initialPhase;
+    }
 
-        while (phase >= 1.0)
-            phase -= 1.0;
+    void reset() noexcept
+    {
+        phase = initialPhase;
+    }
 
-        while (phase < 0.0)
-            phase += 1.0;
+    static double wrapPhase(double value) noexcept
+    {
+        while (value >= 1.0)
+            value -= 1.0;
+
+        while (value < 0.0)
+            value += 1.0;
+
+        return value;
     }
 
     float processSample() noexcept
@@ -67,4 +78,6 @@ private:
     double phase = 0.0;
 
     double phaseIncrement = 0.0;
+
+    double initialPhase = 0.0;
 };

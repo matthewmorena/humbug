@@ -15,7 +15,9 @@ public:
         testStartsAtZero();
         testQuarterCycle();
         testFullCycle();
+        testInitialPhase();
         testReset();
+        testResetToConfiguredPhase();
     }
 
 private:
@@ -87,6 +89,26 @@ private:
         );
     }
 
+    void testInitialPhase()
+    {
+        beginTest(
+            "Oscillator supports configurable initial phase"
+        );
+
+        Oscillator oscillator;
+
+        oscillator.prepare(sampleRate);
+        oscillator.setFrequency(frequency);
+
+        oscillator.setPhase(0.25);
+
+        expectWithinAbsoluteError(
+            oscillator.processSample(),
+            1.0f,
+            0.0001f
+        );
+    }
+
     void testReset()
     {
         beginTest("Reset returns oscillator to zero phase");
@@ -104,6 +126,31 @@ private:
         expectWithinAbsoluteError(
             oscillator.processSample(),
             0.0f,
+            0.0001f
+        );
+    }
+
+    void testResetToConfiguredPhase()
+    {
+        beginTest(
+            "Reset returns oscillator to configured phase"
+        );
+
+        Oscillator oscillator;
+
+        oscillator.prepare(sampleRate);
+        oscillator.setFrequency(frequency);
+
+        oscillator.setPhase(0.25);
+
+        for (int sample = 0; sample < 137; ++sample)
+            oscillator.processSample();
+
+        oscillator.reset();
+
+        expectWithinAbsoluteError(
+            oscillator.processSample(),
+            1.0f,
             0.0001f
         );
     }

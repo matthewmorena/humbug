@@ -16,6 +16,7 @@ public:
         testSecondHarmonic();
         testHarmonicSum();
         testFiftyHzFundamental();
+        testHarmonicPhase();
         testReset();
     }
 
@@ -132,6 +133,36 @@ private:
         expectWithinAbsoluteError(
             generator.processSample(),
             1.0f,
+            0.0001f
+        );
+    }
+
+    void testHarmonicPhase()
+    {
+        beginTest(
+            "Harmonics support independent phase offsets"
+        );
+
+        HumGenerator generator;
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.5f
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        // sin(pi / 2) == 1,
+        // scaled by amplitude 0.5.
+        expectWithinAbsoluteError(
+            generator.processSample(),
+            0.5f,
             0.0001f
         );
     }
