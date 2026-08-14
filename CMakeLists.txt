@@ -77,6 +77,7 @@ target_sources(HumbugTests
         Tests/GainProcessorTests.cpp
         Tests/OscillatorTests.cpp
         Tests/HumGeneratorTests.cpp
+        Tests/HumEstimatorTests.cpp
         Tests/ProcessorIntegrationTests.cpp
 
         Source/PluginProcessor.cpp
