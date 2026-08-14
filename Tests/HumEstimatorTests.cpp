@@ -2,6 +2,9 @@
 
 #include "../Source/DSP/HumEstimator.h"
 #include "../Source/DSP/HumGenerator.h"
+#include "../Source/DSP/Oscillator.h"
+
+#include <JuceHeader.h>
 
 class HumEstimatorTests final
     : public juce::UnitTest
@@ -21,6 +24,8 @@ public:
         testFundamentalPhase();
         testMultipleHarmonics();
         testFiftyHzHum();
+        testHumWithWhiteNoise();
+        testHumWithUnrelatedTone();
     }
 
 private:
@@ -296,6 +301,205 @@ private:
             result[0].phase,
             0.42,
             0.0001
+        );
+    }
+
+    void testHumWithWhiteNoise()
+    {
+        beginTest(
+            "Estimator recovers hum in white noise"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.2f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.41
+        );
+
+        generator.reset();
+
+        // One second of audio at 48 kHz.
+        // Contains exactly 60 cycles of a 60 Hz fundamental.
+        juce::AudioBuffer<float> buffer(
+            1,
+            48000
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        juce::Random random(12345);
+
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample) {
+            const auto noise = ((random.nextFloat() * 2.0f) - 1.0f) * 0.05f;
+            buffer.addSample(
+                0,
+                sample,
+                noise
+            );
+        }
+
+        HumEstimator estimator;
+
+        const auto result =
+            estimator.estimate(
+                buffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        expectWithinAbsoluteError(
+            result[0].amplitude,
+            0.2f,
+            0.005f
+        );
+
+        expectWithinAbsoluteError(
+            result[0].phase,
+            0.18,
+            0.01
+        );
+
+        expectWithinAbsoluteError(
+            result[1].amplitude,
+            0.08f,
+            0.005f
+        );
+
+        expectWithinAbsoluteError(
+            result[1].phase,
+            0.41,
+            0.01
+        );
+    }
+
+    void testHumWithUnrelatedTone()
+    {
+        beginTest(
+            "Estimator recovers hum with unrelated tonal interference"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.2f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.41
+        );
+
+        generator.reset();
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            48000
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        Oscillator interferingTone;
+
+        interferingTone.prepare(sampleRate);
+        interferingTone.setFrequency(440.0);
+        interferingTone.setPhase(0.27);
+
+        constexpr float interferenceAmplitude = 0.15f;
+
+        for (
+            int sample = 0;
+            sample < buffer.getNumSamples();
+            ++sample
+        )
+        {
+            buffer.addSample(
+                0,
+                sample,
+                interferenceAmplitude
+                    * interferingTone.processSample()
+            );
+        }
+
+        HumEstimator estimator;
+
+        const auto result =
+            estimator.estimate(
+                buffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        expectWithinAbsoluteError(
+            result[0].amplitude,
+            0.2f,
+            0.005f
+        );
+
+        expectWithinAbsoluteError(
+            result[0].phase,
+            0.18,
+            0.01
+        );
+
+        expectWithinAbsoluteError(
+            result[1].amplitude,
+            0.08f,
+            0.005f
+        );
+
+        expectWithinAbsoluteError(
+            result[1].phase,
+            0.41,
+            0.01
         );
     }
 };
