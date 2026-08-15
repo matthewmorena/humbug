@@ -71,12 +71,25 @@ private:
 
         HumEstimator estimator;
 
+        const auto numberOfSteps =
+            static_cast<int>(
+                std::round(
+                    (maximumFrequencyHz - minimumFrequencyHz)
+                    / searchStepHz
+                )
+            );
+
         for (
-            double frequency = minimumFrequencyHz;
-            frequency <= maximumFrequencyHz;
-            frequency += searchStepHz
+            int step = 0;
+            step <= numberOfSteps;
+            ++step
         )
         {
+            const auto frequency =
+                minimumFrequencyHz
+                + static_cast<double>(step)
+                    * searchStepHz;
+
             const auto fit =
                 estimator.fit(
                     buffer,
