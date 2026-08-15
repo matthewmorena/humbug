@@ -4,8 +4,6 @@
 #include "../Source/DSP/HumGenerator.h"
 #include "../Source/DSP/Oscillator.h"
 
-#include <JuceHeader.h>
-
 class HumEstimatorTests final
     : public juce::UnitTest
 {
@@ -29,6 +27,8 @@ public:
         testMultipleHarmonicsWithArbitraryWindow();
         testHumWithWhiteNoiseAndArbitraryWindow();
         testHumWithUnrelatedToneAndArbitraryWindow();
+        testCorrectFrequencyProducesSmallResidual();
+        testIncorrectFrequencyProducesLargerResidual();
     }
 
 private:
@@ -549,8 +549,8 @@ private:
 
         generator.reset();
 
-        // 1200 samples at 48 kHz is 25 ms,
-        // or 1.5 cycles of a 60 Hz fundamental.
+        // 2000 samples at 48 kHz is 41.67 ms,
+        // or 2.5 cycles of a 60 Hz fundamental.
         //
         // The original correlation estimator failed
         // for this window length.
@@ -648,8 +648,8 @@ private:
 
         generator.reset();
 
-        // One second of audio at 48 kHz.
-        // Contains exactly 60 cycles of a 60 Hz fundamental.
+        // 41.67 ms of audio at 48 kHz.
+        // Contains exactly 2.5 cycles of a 60 Hz fundamental.
         juce::AudioBuffer<float> buffer(
             1,
             2000 // Can go to 1200 but keeping at 2000 for consistency
@@ -806,6 +806,162 @@ private:
             result[1].phase,
             0.41,
             0.01
+        );
+    }
+
+    void testCorrectFrequencyProducesSmallResidual()
+    {
+        beginTest(
+            "Estimator produces small residual given correct frequency"
+        );
+
+        HumGenerator generator;
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.08
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.12f
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.31
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.05f
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.73
+        );
+
+        generator.reset();
+
+        // 2000 samples at 48 kHz is 41.67 ms,
+        // or 2.5 cycles of a 60 Hz fundamental.
+        //
+        // The original correlation estimator failed
+        // for this window length.
+        juce::AudioBuffer<float> buffer(
+            1,
+            2000
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        HumEstimator estimator;
+
+        const auto fit =
+            estimator.fit(
+                buffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        expect(fit.valid);
+
+        expect(
+            fit.residualEnergy < 0.0001
+        );
+    }
+
+    void testIncorrectFrequencyProducesLargerResidual()
+    {
+        beginTest(
+            "Estimator produces larger residual given incorrect frequency"
+        );
+
+        HumGenerator generator;
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.08
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.12f
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.31
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.05f
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.73
+        );
+
+        generator.reset();
+
+        // 2000 samples at 48 kHz is about 41.67 ms,
+        // or 2.5 cycles of a 60 Hz fundamental.
+        juce::AudioBuffer<float> buffer(
+            1,
+            2000
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        HumEstimator estimator;
+
+        const auto correctFit =
+            estimator.fit(
+                buffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        const auto incorrectFit =
+            estimator.fit(
+                buffer,
+                0,
+                sampleRate,
+                59.0
+            );
+
+        expect(correctFit.valid);
+        expect(incorrectFit.valid);
+
+        expect(
+            correctFit.residualEnergy
+                < incorrectFit.residualEnergy
         );
     }
 };
