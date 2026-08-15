@@ -78,6 +78,7 @@ target_sources(HumbugTests
         Tests/OscillatorTests.cpp
         Tests/HumGeneratorTests.cpp
         Tests/HumEstimatorTests.cpp
+        Tests/FundamentalFrequencyDetectorTests.cpp
         Tests/ProcessorIntegrationTests.cpp
         Tests/LinearSystemSolverTests.cpp
 
