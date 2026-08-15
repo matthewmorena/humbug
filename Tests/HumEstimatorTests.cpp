@@ -358,7 +358,12 @@ private:
 
         juce::Random random(12345);
 
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample) {
+        for (
+            int sample = 0; 
+            sample < buffer.getNumSamples(); 
+            ++sample
+        )
+        {
             const auto noise = ((random.nextFloat() * 2.0f) - 1.0f) * 0.05f;
             buffer.addSample(
                 0,
@@ -661,7 +666,12 @@ private:
 
         juce::Random random(12345);
 
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample) {
+        for (
+            int sample = 0; 
+            sample < buffer.getNumSamples(); 
+            ++sample
+        )
+        {
             const auto noise = ((random.nextFloat() * 2.0f) - 1.0f) * 0.05f;
             buffer.addSample(
                 0,
