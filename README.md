@@ -19,11 +19,11 @@ Build a transparent hum removal plugin suitable for both live monitoring and stu
   - [x] Configurable harmonic amplitude and phase
   - [x] Buffer-level generation
   - [x] Processor integration
-- [ ] Learn mode
+- [x] Learn mode
   - [x] Fixed-frequency harmonic amplitude/phase estimation
   - [x] Arbitrary-window least-squares estimation
   - [x] Basic interference robustness testing
-  - [ ] Fundamental-frequency detection
+  - [x] Fundamental-frequency detection
 - [ ] Fixed harmonic subtraction
   - [ ] Reconstruct estimated hum
   - [ ] Subtract reconstructed hum from input

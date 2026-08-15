@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstddef>
 #include <numbers>
+#include <algorithm>
+#include <limits>
 
 class HumEstimator
 {
@@ -32,14 +34,23 @@ public:
     using Result =
         std::array<HarmonicEstimate, maxHarmonics>;
 
-    Result estimate(
+    struct FitResult
+    {
+        Result harmonics {};
+        double residualEnergy =
+            std::numeric_limits<double>::infinity();
+        bool valid = false;
+    };
+
+    FitResult fit(
         const juce::AudioBuffer<float>& buffer,
         int channel,
         double sampleRate,
         double fundamentalFrequencyHz
     ) const noexcept
     {
-        Result result {};
+        FitResult fitResult {};
+        auto& result = fitResult.harmonics;
 
         if (
             channel < 0
@@ -49,7 +60,7 @@ public:
             || fundamentalFrequencyHz <= 0.0
         )
         {
-            return result;
+            return fitResult;
         }
 
         constexpr auto twoPi =
@@ -79,11 +90,13 @@ public:
             >= sampleRate * 0.5
         )
         {
-            return result;
+            return fitResult;
         }
 
         Matrix<numCoefficients> normalMatrix {};
         Vector<numCoefficients> rightHandSide {};
+
+        double inputEnergy = 0.0;
 
         const auto* samples =
             buffer.getReadPointer(channel);
@@ -142,6 +155,9 @@ public:
                     samples[sample]
                 );
 
+            inputEnergy +=
+                inputSample * inputSample;
+
             // Accumulate A^T x.
             for (
                 std::size_t row = 0;
@@ -184,7 +200,7 @@ public:
             );
 
         if (!solved)
-            return result;
+            return fitResult;
 
         // Convert sine/cosine coefficients back
         // into amplitude and normalized phase.
@@ -230,6 +246,42 @@ public:
                 phaseRadians / twoPi;
         }
 
-        return result;
+        double explainedEnergy = 0.0;
+
+        for (
+            std::size_t coefficientIndex = 0;
+            coefficientIndex < numCoefficients;
+            ++coefficientIndex
+        )
+        {
+            explainedEnergy +=
+                coefficients[coefficientIndex]
+                * rightHandSide[coefficientIndex];
+        }
+
+        fitResult.residualEnergy =
+            std::max(
+                0.0,
+                inputEnergy - explainedEnergy
+            );
+
+        fitResult.valid = true;
+
+        return fitResult;
+    }
+
+    Result estimate(
+        const juce::AudioBuffer<float>& buffer,
+        int channel,
+        double sampleRate,
+        double fundamentalFrequencyHz
+    ) const noexcept
+    {
+        return fit(
+            buffer,
+            channel,
+            sampleRate,
+            fundamentalFrequencyHz
+        ).harmonics;
     }
 };
