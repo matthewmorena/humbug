@@ -4,6 +4,8 @@
 
 #include <cmath>
 #include <limits>
+#include <algorithm>
+#include <cstddef>
 
 class FundamentalFrequencyDetector
 {
@@ -15,7 +17,12 @@ public:
         double residualEnergy =
             std::numeric_limits<double>::infinity();
 
+        double explainedFraction = 0.0;
+
+        std::size_t supportedHarmonics = 0;
+
         bool valid = false;
+        bool humDetected = false;
     };
 
     Result detect(
@@ -42,22 +49,50 @@ public:
                 62.0
             );
 
+        Result bestResult {};
+
         if (!fiftyHzResult.valid)
-            return sixtyHzResult;
+        {
+            bestResult = sixtyHzResult;
+        }
+        else if (!sixtyHzResult.valid)
+        {
+            bestResult = fiftyHzResult;
+        }
+        else
+        {
+            bestResult =
+                (
+                    fiftyHzResult.residualEnergy
+                    < sixtyHzResult.residualEnergy
+                )
+                    ? fiftyHzResult
+                    : sixtyHzResult;
+        }
 
-        if (!sixtyHzResult.valid)
-            return fiftyHzResult;
+        if (!bestResult.valid)
+            return bestResult;
 
-        return (
-            fiftyHzResult.residualEnergy
-            < sixtyHzResult.residualEnergy
-        )
-            ? fiftyHzResult
-            : sixtyHzResult;
+        return classifyResult(
+            buffer,
+            channel,
+            sampleRate,
+            bestResult
+        );
     }
 
 private:
-    static constexpr double searchStepHz = 0.1;
+    static constexpr double searchStepHz =
+        0.1;
+        
+    static constexpr double minimumExplainedFraction =
+        0.1;
+
+    static constexpr double minimumRelativeHarmonicAmplitude =
+        0.05;
+
+    static constexpr std::size_t minimumSupportedHarmonics =
+        2;
 
     Result searchRange(
         const juce::AudioBuffer<float>& buffer,
@@ -226,5 +261,111 @@ private:
         refinedResult.valid = true;
 
         return refinedResult;
+    }
+
+    Result classifyResult(
+        const juce::AudioBuffer<float>& buffer,
+        int channel,
+        double sampleRate,
+        Result result
+    ) const noexcept
+    {
+        double inputEnergy = 0.0;
+
+        const auto* samples =
+            buffer.getReadPointer(channel);
+
+        for (
+            int sample = 0;
+            sample < buffer.getNumSamples();
+            ++sample
+        )
+        {
+            const auto value =
+                static_cast<double>(
+                    samples[sample]
+                );
+
+            inputEnergy +=
+                value * value;
+        }
+
+        // Nothing meaningful to classify.
+        if (
+            inputEnergy
+            <= std::numeric_limits<double>::epsilon()
+        )
+        {
+            return result;
+        }
+
+        HumEstimator estimator;
+
+        const auto fit =
+            estimator.fit(
+                buffer,
+                channel,
+                sampleRate,
+                result.frequencyHz
+            );
+
+        if (!fit.valid)
+        {
+            result.valid = false;
+            return result;
+        }
+
+        result.residualEnergy =
+            fit.residualEnergy;
+
+        result.explainedFraction =
+            std::clamp(
+                1.0
+                    - fit.residualEnergy
+                        / inputEnergy,
+                0.0,
+                1.0
+            );
+
+        double strongestAmplitude = 0.0;
+
+        for (const auto& harmonic : fit.harmonics)
+        {
+            strongestAmplitude =
+                std::max(
+                    strongestAmplitude,
+                    static_cast<double>(
+                        harmonic.amplitude
+                    )
+                );
+        }
+
+        if (strongestAmplitude <= 0.0)
+            return result;
+
+        const auto supportThreshold =
+            strongestAmplitude
+            * minimumRelativeHarmonicAmplitude;
+
+        for (const auto& harmonic : fit.harmonics)
+        {
+            if (
+                static_cast<double>(
+                    harmonic.amplitude
+                )
+                >= supportThreshold
+            )
+            {
+                ++result.supportedHarmonics;
+            }
+        }
+
+        result.humDetected =
+            result.explainedFraction
+                >= minimumExplainedFraction
+            && result.supportedHarmonics
+                >= minimumSupportedHarmonics;
+
+        return result;
     }
 };

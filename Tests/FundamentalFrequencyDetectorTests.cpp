@@ -25,6 +25,11 @@ public:
         testDetectsNonGridFrequencyWithWhiteNoise();
         testDetectsNonGridFrequencyWithUnrelatedTone();
         testDetectsNonGridFrequencyWithWeakFundamentalAndUnrelatedTone();
+        testRejectsSilence();
+        testRejectsWhiteNoise();
+        testRejectsUnrelatedTone();
+        testRejectsSingleHumHarmonic();
+        testDetectsTwoHarmonicHum();
     }
 
 private:
@@ -82,6 +87,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -141,6 +147,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -200,6 +207,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -259,6 +267,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -323,6 +332,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -398,6 +408,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -479,6 +490,7 @@ private:
             );
 
         expect(result.valid);
+        expect(result.humDetected);
 
         expectWithinAbsoluteError(
             result.frequencyHz,
@@ -594,6 +606,7 @@ private:
                 );
 
             expect(result.valid);
+            expect(result.humDetected);
 
             expectWithinAbsoluteError(
                 result.frequencyHz,
@@ -602,6 +615,237 @@ private:
             );
 
         }
+    }
+
+    void testRejectsSilence()
+    {
+        beginTest(
+            "Detector does not report hum for silence"
+        );
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            12000
+        );
+
+        buffer.clear();
+
+        FundamentalFrequencyDetector detector;
+
+        const auto result =
+            detector.detect(
+                buffer,
+                0,
+                sampleRate
+            );
+
+        expect(result.valid);
+        expect(!result.humDetected);
+    }
+
+    void testRejectsWhiteNoise()
+    {
+        beginTest(
+            "Detector does not report hum for white noise"
+        );
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            12000
+        );
+
+        buffer.clear();
+
+        juce::Random random(12345);
+
+        for (
+            int sample = 0;
+            sample < buffer.getNumSamples();
+            ++sample
+        )
+        {
+            const auto noise =
+                ((random.nextFloat() * 2.0f) - 1.0f)
+                * 0.05f;
+
+            buffer.setSample(
+                0,
+                sample,
+                noise
+            );
+        }
+
+        FundamentalFrequencyDetector detector;
+
+        const auto result =
+            detector.detect(
+                buffer,
+                0,
+                sampleRate
+            );
+
+        expect(result.valid);
+        expect(!result.humDetected);
+    }
+
+    void testRejectsUnrelatedTone()
+    {
+        beginTest(
+            "Detector does not report hum for unrelated tone"
+        );
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            12000
+        );
+
+        buffer.clear();
+
+        Oscillator oscillator;
+
+        oscillator.prepare(sampleRate);
+        oscillator.setFrequency(440.0);
+        oscillator.setPhase(0.27);
+
+        for (
+            int sample = 0;
+            sample < buffer.getNumSamples();
+            ++sample
+        )
+        {
+            buffer.setSample(
+                0,
+                sample,
+                0.15f * oscillator.processSample()
+            );
+        }
+
+        FundamentalFrequencyDetector detector;
+
+        const auto result =
+            detector.detect(
+                buffer,
+                0,
+                sampleRate
+            );
+
+        expect(result.valid);
+        expect(!result.humDetected);
+    }
+
+    void testRejectsSingleHumHarmonic()
+    {
+        beginTest(
+            "Detector does not report hum for isolated hum harmonic"
+        );
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            12000
+        );
+
+        buffer.clear();
+
+        Oscillator oscillator;
+
+        oscillator.prepare(sampleRate);
+        oscillator.setFrequency(
+            420.0
+        );
+        oscillator.setPhase(
+            0.27
+        );
+
+        constexpr float amplitude =
+            0.15f;
+
+        for (
+            int sample = 0;
+            sample < buffer.getNumSamples();
+            ++sample
+        )
+        {
+            buffer.setSample(
+                0,
+                sample,
+                amplitude
+                    * oscillator.processSample()
+            );
+        }
+
+        FundamentalFrequencyDetector detector;
+
+        const auto result =
+            detector.detect(
+                buffer,
+                0,
+                sampleRate
+            );
+
+        expect(result.valid);
+        expect(!result.humDetected);
+    }
+
+    void testDetectsTwoHarmonicHum()
+    {
+        beginTest(
+            "Detector reports hum when two harmonics support fundamental"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            59.73
+        );
+
+        generator.prepare(sampleRate);
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.20f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.08f
+        );
+
+        generator.reset();
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            12000
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(buffer);
+
+        FundamentalFrequencyDetector detector;
+
+        const auto result =
+            detector.detect(
+                buffer,
+                0,
+                sampleRate
+            );
+
+        expect(result.valid);
+        expect(result.humDetected);
+
+        expectEquals(
+            static_cast<int>(
+                result.supportedHarmonics
+            ),
+            2
+        );
+
+        expectWithinAbsoluteError(
+            result.frequencyHz,
+            59.73,
+            0.01
+        );
     }
 };
 
