@@ -23,6 +23,7 @@ public:
         testReconstructsKnownModel();
         testReconstructsEstimatedHum();
         testSubtractsEstimatedHum();
+        testMeasuresCancellationEffectiveness();
     }
 
 private:
@@ -317,6 +318,176 @@ private:
                 outputSample,
                 cleanSample,
                 0.0001f
+            );
+        }
+    }
+
+    void testMeasuresCancellationEffectiveness()
+    {
+        beginTest(
+            "Fixed subtraction significantly attenuates hum"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        constexpr int numSamples = 2000;
+
+        juce::AudioBuffer<float> humBuffer(
+            1,
+            numSamples
+        );
+
+        humBuffer.clear();
+
+        generator.addToBuffer(
+            humBuffer
+        );
+
+        HumEstimator estimator;
+
+        const auto estimatedModel =
+            estimator.estimate(
+                humBuffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        HumReconstructor reconstructor;
+
+        reconstructor.prepare(sampleRate);
+
+        reconstructor.setModel(
+            estimatedModel
+        );
+
+        const auto* humSamples =
+            humBuffer.getReadPointer(0);
+
+        constexpr double cleanFrequencyHz =
+            1000.0;
+
+        constexpr float cleanAmplitude =
+            0.20f;
+
+        constexpr auto twoPi =
+            2.0 * std::numbers::pi;
+
+        double errorEnergyBefore = 0.0;
+        double errorEnergyAfter = 0.0;
+
+        for (
+            int sample = 0;
+            sample < numSamples;
+            ++sample
+        )
+        {
+            const auto time =
+                static_cast<double>(sample)
+                / sampleRate;
+
+            const auto cleanSample =
+                cleanAmplitude
+                * static_cast<float>(
+                    std::sin(
+                        twoPi
+                        * cleanFrequencyHz
+                        * time
+                    )
+                );
+
+            const auto mixedSample =
+                cleanSample
+                + humSamples[sample];
+
+            const auto reconstructedHum =
+                reconstructor.processSample();
+
+            const auto outputSample =
+                mixedSample
+                - reconstructedHum;
+
+            const auto errorBefore =
+                mixedSample - cleanSample;
+
+            const auto errorAfter =
+                outputSample - cleanSample;
+
+            errorEnergyBefore +=
+                static_cast<double>(errorBefore)
+                * errorBefore;
+
+            errorEnergyAfter +=
+                static_cast<double>(errorAfter)
+                * errorAfter;
+        }
+
+        const auto rmsBefore =
+            std::sqrt(
+                errorEnergyBefore
+                / static_cast<double>(numSamples)
+            );
+
+        const auto rmsAfter =
+            std::sqrt(
+                errorEnergyAfter
+                / static_cast<double>(numSamples)
+            );
+        
+        expect(
+            rmsBefore > 0.0
+        );
+
+        if (rmsAfter > 0.0)
+        {
+            const auto attenuationDb =
+                20.0
+                * std::log10(
+                    rmsAfter / rmsBefore
+                );
+
+            expect(
+                attenuationDb < -60.0
             );
         }
     }
