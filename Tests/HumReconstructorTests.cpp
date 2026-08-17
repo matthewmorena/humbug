@@ -25,6 +25,7 @@ public:
         testSubtractsEstimatedHum();
         testMeasuresCancellationEffectiveness();
         testReconstructionContinuesAfterAnalysisWindow();
+        testSubtractsHumLearnedFromMixedSignal();
     }
 
 private:
@@ -660,7 +661,267 @@ private:
                 attenuationDb < -60.0
             );
         }
-        
+    }
+
+    void testSubtractsHumLearnedFromMixedSignal()
+    {
+        beginTest(
+            "Fixed subtraction removes hum learned from mixed signal"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        constexpr int analysisSamples = 12000;
+        constexpr int cancellationSamples = 2000;
+
+        constexpr int totalSamples =
+            analysisSamples
+            + cancellationSamples;
+
+        juce::AudioBuffer<float> humBuffer(
+            1,
+            totalSamples
+        );
+
+        humBuffer.clear();
+
+        generator.addToBuffer(
+            humBuffer
+        );
+
+        constexpr double cleanFrequencyHz =
+            997.0;
+
+        constexpr float cleanAmplitude =
+            0.20f;
+
+        constexpr auto twoPi =
+            2.0 * std::numbers::pi;
+
+        juce::AudioBuffer<float> mixedBuffer(
+            1,
+            totalSamples
+        );
+
+        mixedBuffer.clear();
+
+        const auto* humSamples =
+            humBuffer.getReadPointer(0);
+
+        auto* mixedSamples =
+            mixedBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < totalSamples;
+            ++sample
+        )
+        {
+            const auto time =
+                static_cast<double>(sample)
+                / sampleRate;
+
+            const auto cleanSample =
+                cleanAmplitude
+                * static_cast<float>(
+                    std::sin(
+                        twoPi
+                        * cleanFrequencyHz
+                        * time
+                    )
+                );
+
+            mixedSamples[sample] =
+                cleanSample
+                + humSamples[sample];
+        }
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        analysisBuffer.copyFrom(
+            0,
+            0,
+            mixedBuffer,
+            0,
+            0,
+            analysisSamples
+        );
+
+        HumEstimator estimator;
+
+        const auto estimatedModel =
+            estimator.estimate(
+                analysisBuffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        HumReconstructor reconstructor;
+
+        reconstructor.prepare(
+            sampleRate
+        );
+
+        reconstructor.setModel(
+            estimatedModel,
+            analysisSamples
+        );
+
+        double errorEnergyBefore = 0.0;
+        double errorEnergyAfter = 0.0;
+
+        for (
+            int sample = 0;
+            sample < cancellationSamples;
+            ++sample
+        )
+        {
+            const auto sourceIndex =
+                analysisSamples
+                + sample;
+
+            const auto time =
+                static_cast<double>(sourceIndex)
+                / sampleRate;
+
+            const auto cleanSample =
+                cleanAmplitude
+                * static_cast<float>(
+                    std::sin(
+                        twoPi
+                        * cleanFrequencyHz
+                        * time
+                    )
+                );
+
+            const auto mixedSample =
+                mixedSamples[sourceIndex];
+
+            const auto reconstructedHum =
+                reconstructor.processSample();
+
+            const auto outputSample =
+                mixedSample
+                - reconstructedHum;
+
+            const auto errorBefore =
+                mixedSample
+                - cleanSample;
+
+            const auto errorAfter =
+                outputSample
+                - cleanSample;
+
+            errorEnergyBefore +=
+                static_cast<double>(errorBefore)
+                * errorBefore;
+
+            errorEnergyAfter +=
+                static_cast<double>(errorAfter)
+                * errorAfter;
+        }
+
+        const auto rmsBefore =
+            std::sqrt(
+                errorEnergyBefore
+                / static_cast<double>(
+                    cancellationSamples
+                )
+            );
+
+        const auto rmsAfter =
+            std::sqrt(
+                errorEnergyAfter
+                / static_cast<double>(
+                    cancellationSamples
+                )
+            );
+
+        expect(
+            rmsBefore > 0.0
+        );
+
+        if (rmsAfter > 0.0)
+        {
+            const auto attenuationDb =
+                20.0
+                * std::log10(
+                    rmsAfter / rmsBefore
+                );
+
+            logMessage(
+                "Mixed-signal hum RMS before: "
+                + juce::String(
+                    rmsBefore,
+                    10
+                )
+            );
+
+            logMessage(
+                "Mixed-signal hum RMS after: "
+                + juce::String(
+                    rmsAfter,
+                    10
+                )
+            );
+
+            logMessage(
+                "Mixed-signal attenuation: "
+                + juce::String(
+                    attenuationDb,
+                    2
+                )
+                + " dB"
+            );
+
+            expect(
+                attenuationDb < -40.0
+            );
+        }
     }
 };
 
