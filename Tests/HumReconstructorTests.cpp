@@ -24,6 +24,7 @@ public:
         testReconstructsEstimatedHum();
         testSubtractsEstimatedHum();
         testMeasuresCancellationEffectiveness();
+        testReconstructionContinuesAfterAnalysisWindow();
     }
 
 private:
@@ -490,6 +491,176 @@ private:
                 attenuationDb < -60.0
             );
         }
+    }
+
+    void testReconstructionContinuesAfterAnalysisWindow()
+    {
+        beginTest(
+            "Reconstruction continues phase after analysis window"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        constexpr int analysisSamples = 2000;
+        constexpr int cancellationSamples = 2000;
+
+        constexpr int totalSamples =
+            analysisSamples
+            + cancellationSamples;
+
+        juce::AudioBuffer<float> continuousHum(
+            1,
+            totalSamples
+        );
+
+        continuousHum.clear();
+
+        generator.addToBuffer(
+            continuousHum
+        );
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        analysisBuffer.copyFrom(
+            0,
+            0,
+            continuousHum,
+            0,
+            0,
+            analysisSamples
+        );
+
+        HumEstimator estimator;
+
+        const auto estimatedModel =
+            estimator.estimate(
+                analysisBuffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        HumReconstructor reconstructor;
+
+        reconstructor.prepare(
+            sampleRate
+        );
+
+        reconstructor.setModel(
+            estimatedModel,
+            analysisSamples
+        );
+
+        const auto* humSamples =
+            continuousHum.getReadPointer(0);
+
+        double errorEnergyBefore = 0.0;
+        double errorEnergyAfter = 0.0;
+
+        for (
+            int sample = 0;
+            sample < cancellationSamples;
+            ++sample
+        )
+        {
+            const auto sourceIndex =
+                analysisSamples + sample;
+
+            const auto actualHum =
+                humSamples[sourceIndex];
+
+            const auto reconstructedHum =
+                reconstructor.processSample();
+
+            errorEnergyBefore +=
+                static_cast<double>(actualHum)
+                * actualHum;
+
+            const auto error =
+                actualHum
+                - reconstructedHum;
+
+            errorEnergyAfter +=
+                static_cast<double>(error)
+                * error;
+        }
+
+        const auto rmsBefore =
+            std::sqrt(
+                errorEnergyBefore
+                / static_cast<double>(
+                    cancellationSamples
+                )
+            );
+
+        const auto rmsAfter =
+            std::sqrt(
+                errorEnergyAfter
+                / static_cast<double>(
+                    cancellationSamples
+                )
+            );
+
+        expect(
+            rmsBefore > 0.0
+        );
+
+        if (rmsAfter > 0.0)
+        {
+            const auto attenuationDb =
+                20.0
+                * std::log10(
+                    rmsAfter / rmsBefore
+                );
+
+            expect(
+                attenuationDb < -60.0
+            );
+        }
+        
     }
 };
 

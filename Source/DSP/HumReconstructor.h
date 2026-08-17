@@ -5,20 +5,28 @@
 
 #include <array>
 #include <cstddef>
+#include <cmath>
 
 class HumReconstructor
 {
 public:
-    void prepare(double sampleRate) noexcept
+    void prepare(double newSampleRate) noexcept
     {
+        sampleRate = newSampleRate;
+
         for (auto& oscillator : oscillators)
             oscillator.prepare(sampleRate);
     }
 
     void setModel(
-        const HumEstimator::Result& model
+        const HumEstimator::Result& model,
+        std::size_t sampleOffset = 0
     ) noexcept
     {
+        const auto elapsedSeconds =
+            static_cast<double>(sampleOffset)
+            / sampleRate;
+
         for (
             std::size_t harmonicIndex = 0;
             harmonicIndex < HumEstimator::maxHarmonics;
@@ -36,9 +44,20 @@ public:
                     harmonic.frequencyHz
                 );
 
+            auto phase =
+                harmonic.phase
+                + harmonic.frequencyHz
+                    * elapsedSeconds;
+
+            phase =
+                std::fmod(
+                    phase,
+                    1.0
+                );
+
             oscillators[harmonicIndex]
                 .setPhase(
-                    harmonic.phase
+                    phase
                 );
         }
     }
@@ -69,6 +88,8 @@ public:
     }
 
 private:
+    double sampleRate = 44100.0;
+
     std::array<
         Oscillator,
         HumEstimator::maxHarmonics
