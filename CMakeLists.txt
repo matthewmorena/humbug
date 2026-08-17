@@ -81,6 +81,7 @@ target_sources(HumbugTests
         Tests/FundamentalFrequencyDetectorTests.cpp
         Tests/ProcessorIntegrationTests.cpp
         Tests/LinearSystemSolverTests.cpp
+        Tests/HumReconstructorTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
