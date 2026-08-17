@@ -22,6 +22,7 @@ public:
     {
         testReconstructsKnownModel();
         testReconstructsEstimatedHum();
+        testSubtractsEstimatedHum();
     }
 
 private:
@@ -185,6 +186,136 @@ private:
             expectWithinAbsoluteError(
                 reconstructedSample,
                 samples[sample],
+                0.0001f
+            );
+        }
+    }
+
+    void testSubtractsEstimatedHum()
+    {
+        beginTest(
+            "Subtracting reconstructed hum recovers clean signal"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(sampleRate);
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        constexpr int numSamples = 2000;
+
+        juce::AudioBuffer<float> humBuffer(
+            1,
+            numSamples
+        );
+
+        humBuffer.clear();
+
+        generator.addToBuffer(
+            humBuffer
+        );
+
+        HumEstimator estimator;
+
+        const auto estimatedModel =
+            estimator.estimate(
+                humBuffer,
+                0,
+                sampleRate,
+                60.0
+            );
+
+        HumReconstructor reconstructor;
+
+        reconstructor.prepare(sampleRate);
+
+        reconstructor.setModel(
+            estimatedModel
+        );
+
+        const auto* humSamples =
+            humBuffer.getReadPointer(0);
+
+        constexpr double cleanFrequencyHz =
+            1000.0;
+
+        constexpr float cleanAmplitude =
+            0.20f;
+
+        constexpr auto twoPi =
+            2.0 * std::numbers::pi;
+
+        for (
+            int sample = 0;
+            sample < numSamples;
+            ++sample
+        )
+        {
+            const auto time =
+                static_cast<double>(sample)
+                / sampleRate;
+
+            const auto cleanSample =
+                cleanAmplitude
+                * static_cast<float>(
+                    std::sin(
+                        twoPi
+                        * cleanFrequencyHz
+                        * time
+                    )
+                );
+
+            const auto mixedSample =
+                cleanSample
+                + humSamples[sample];
+
+            const auto reconstructedHum =
+                reconstructor.processSample();
+
+            const auto outputSample =
+                mixedSample
+                - reconstructedHum;
+
+            expectWithinAbsoluteError(
+                outputSample,
+                cleanSample,
                 0.0001f
             );
         }
