@@ -21,6 +21,8 @@ public:
     void runTest() override
     {
         testLearnsAndCancelsHumFromMixedSignal();
+        testPassesThroughWhenNoHumDetected();
+        testResetDisablesCancellation();
     }
 
 private:
@@ -280,6 +282,186 @@ private:
                 attenuationDb < -40.0
             );
         }
+    }
+
+    void testPassesThroughWhenNoHumDetected()
+    {
+        beginTest(
+            "Canceller remains inactive when no hum is detected"
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        constexpr double signalFrequencyHz =
+            997.0;
+
+        constexpr float signalAmplitude =
+            0.20f;
+
+        constexpr auto twoPi =
+            2.0 * std::numbers::pi;
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        auto* samples =
+            analysisBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < analysisSamples;
+            ++sample
+        )
+        {
+            const auto time =
+                static_cast<double>(sample)
+                / sampleRate;
+
+            samples[sample] =
+                signalAmplitude
+                * static_cast<float>(
+                    std::sin(
+                        twoPi
+                        * signalFrequencyHz
+                        * time
+                    )
+                );
+        }
+
+        FixedHumCanceller canceller;
+
+        canceller.prepare(
+            sampleRate
+        );
+
+        const auto learnResult =
+            canceller.learn(
+                analysisBuffer,
+                0
+            );
+
+        expect(
+            learnResult.valid
+        );
+
+        expect(
+            !learnResult.humDetected
+        );
+
+        expect(
+            !canceller.isActive()
+        );
+
+        constexpr float inputSample =
+            0.375f;
+
+        const auto outputSample =
+            canceller.processSample(
+                inputSample
+            );
+
+        expectEquals(
+            outputSample,
+            inputSample
+        );
+    }
+
+    void testResetDisablesCancellation()
+    {
+        beginTest(
+            "Reset disables active cancellation"
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            60.0
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.reset();
+
+        constexpr int analysisSamples =
+            12000;
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        analysisBuffer.clear();
+
+        generator.addToBuffer(
+            analysisBuffer
+        );
+
+        FixedHumCanceller canceller;
+
+        canceller.prepare(
+            sampleRate
+        );
+
+        const auto learnResult =
+            canceller.learn(
+                analysisBuffer,
+                0
+            );
+
+        expect(
+            learnResult.valid
+        );
+
+        expect(
+            learnResult.humDetected
+        );
+
+        expect(
+            canceller.isActive()
+        );
+
+        canceller.reset();
+
+        expect(
+            !canceller.isActive()
+        );
+
+        constexpr float inputSample =
+            0.375f;
+
+        expectEquals(
+            canceller.processSample(
+                inputSample
+            ),
+            inputSample
+        );
     }
 };
 
