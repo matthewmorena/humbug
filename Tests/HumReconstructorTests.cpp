@@ -893,31 +893,6 @@ private:
                     rmsAfter / rmsBefore
                 );
 
-            logMessage(
-                "Mixed-signal hum RMS before: "
-                + juce::String(
-                    rmsBefore,
-                    10
-                )
-            );
-
-            logMessage(
-                "Mixed-signal hum RMS after: "
-                + juce::String(
-                    rmsAfter,
-                    10
-                )
-            );
-
-            logMessage(
-                "Mixed-signal attenuation: "
-                + juce::String(
-                    attenuationDb,
-                    2
-                )
-                + " dB"
-            );
-
             expect(
                 attenuationDb < -40.0
             );
