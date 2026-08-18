@@ -82,6 +82,7 @@ target_sources(HumbugTests
         Tests/ProcessorIntegrationTests.cpp
         Tests/LinearSystemSolverTests.cpp
         Tests/HumReconstructorTests.cpp
+        Tests/FixedHumCancellerTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
