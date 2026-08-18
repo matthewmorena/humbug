@@ -234,3 +234,329 @@ Regression tests confirm that the current classification rejects:
 while accepting a synthetic hum containing only two supported harmonics.
 
 The detector result keeps mathematical validity separate from hum classification. A candidate frequency can therefore represent a valid model fit while `humDetected` remains false.
+
+## Fixed Harmonic Subtraction
+
+Once the mains fundamental has been detected and the harmonic amplitudes and
+phases have been estimated, the learned hum model can be reconstructed and
+subtracted from subsequent input samples.
+
+If the estimated hum is:
+
+```text
+h_hat(t) =
+    sum_k A_k sin(2 pi f_k t + phi_k)
+```
+
+then fixed subtraction produces:
+
+```text
+y(t) =
+    x(t) - h_hat(t)
+```
+
+where:
+
+* `x(t)` is the input containing desired signal plus hum
+* `h_hat(t)` is the reconstructed hum estimate
+* `y(t)` is the cancellation output
+
+### Hum Reconstruction
+
+`HumReconstructor` consumes the harmonic model returned by `HumEstimator`.
+
+For each harmonic it uses the estimated:
+
+* frequency
+* amplitude
+* normalized phase
+
+and synthesizes:
+
+```text
+h_hat_k(t) =
+    A_k sin(
+        2 pi (
+            f_k t + phi_k
+        )
+    )
+```
+
+The reconstructed hum sample is the sum of all supported harmonic components.
+
+Initial tests verified reconstruction in two stages.
+
+First, a manually specified harmonic model was reconstructed directly and
+compared sample-by-sample with its analytical waveform.
+
+Second, synthetic hum was generated using `HumGenerator`, estimated using
+`HumEstimator`, reconstructed using `HumReconstructor`, and compared with the
+original generated signal.
+
+Both tests passed within the expected floating-point tolerance.
+
+### Phase Continuation After the Analysis Window
+
+The phase returned by `HumEstimator` is referenced to sample 0 of the analyzed
+buffer.
+
+If reconstruction begins later in the signal timeline, starting directly from
+the stored phase would restart the learned waveform at the beginning of the
+analysis window rather than continuing it.
+
+For a harmonic with frequency `f`, estimated normalized phase `phi`, sample
+offset `N`, and sample rate `Fs`, the reconstruction start phase is advanced by:
+
+```text
+phi_start =
+    phi
+    + f * N / Fs
+```
+
+and wrapped into the normalized phase range `[0, 1)`.
+
+Equivalently, the elapsed time is:
+
+```text
+t_elapsed =
+    N / Fs
+```
+
+and:
+
+```text
+phi_start =
+    phi
+    + f * t_elapsed
+```
+
+modulo one cycle.
+
+A regression test was created using a 2000-sample analysis window followed by
+a separate cancellation window.
+
+At 48 kHz, 2000 samples corresponds to approximately 41.67 ms. For a 60 Hz
+fundamental this advances the first three harmonics by:
+
+```text
+60 Hz  -> 2.5 cycles
+120 Hz -> 5.0 cycles
+180 Hz -> 7.5 cycles
+```
+
+Without phase advancement, the test failed because the fundamental and third
+harmonic restarted half a cycle out of phase.
+
+After adding sample-offset phase continuation to `HumReconstructor`, the test
+passed and reconstruction remained aligned with the continuous source signal.
+
+### Ideal Fixed-Subtraction Experiment
+
+The first subtraction experiment used:
+
+```text
+known clean signal
++
+known synthetic hum
+```
+
+The hum was estimated from a hum-only analysis buffer, reconstructed, and then
+subtracted from the mixture.
+
+Cancellation error was measured relative to the known clean signal.
+
+Before subtraction:
+
+```text
+error_before =
+    mixed - clean
+```
+
+which is equivalent to the injected hum.
+
+After subtraction:
+
+```text
+error_after =
+    output - clean
+```
+
+which represents the remaining hum reconstruction error.
+
+The RMS values were:
+
+```text
+Hum RMS before: 0.2373241749
+Hum RMS after:  0.0000000086
+```
+
+The attenuation was calculated as:
+
+```text
+attenuation_dB =
+    20 log10(
+        RMS_after / RMS_before
+    )
+```
+
+which produced approximately:
+
+```text
+-148.86 dB
+```
+
+This result represents an ideal synthetic case with exact model compatibility,
+known fundamental frequency, stationary hum, and perfect timeline alignment.
+
+It should be treated as validation of the implementation rather than an
+expected real-world cancellation level.
+
+The regression test currently requires at least 60 dB of attenuation rather
+than encoding the much larger observed value.
+
+### Cancellation Learned From Mixed Signal
+
+A more realistic experiment allowed the desired signal to be present during
+the Learn window.
+
+The test signal contained:
+
+```text
+60 / 120 / 180 Hz synthetic hum
++
+997 Hz unrelated sinusoid
+```
+
+The use of 997 Hz avoids an artificially favorable case where the desired tone
+contains an integer number of cycles within the analysis window.
+
+A short 2000-sample analysis window produced approximately:
+
+```text
+-35.63 dB
+```
+
+of cancellation.
+
+This showed that unrelated coherent signal content can bias the fitted hum
+coefficients over a short finite observation window.
+
+The analysis duration was then increased to the 250 ms Learn Mode window
+identified during the frequency-detection experiments.
+
+At 48 kHz:
+
+```text
+analysis window = 12000 samples
+```
+
+Using the 250 ms mixed-signal analysis window produced:
+
+```text
+Hum RMS before: 0.2373241739
+Hum RMS after:  0.0005836854
+Attenuation:    -52.18 dB
+```
+
+The current regression test requires at least:
+
+```text
+-40 dB
+```
+
+of attenuation in this synthetic mixed-signal case.
+
+This preserves useful margin rather than treating the exact observed value as
+a production requirement.
+
+The experiment reinforces the earlier finding that analysis-window duration
+affects not only fundamental-frequency detection but also the accuracy of
+harmonic parameter estimation in the presence of coherent out-of-model
+content.
+
+### FixedHumCanceller
+
+`FixedHumCanceller` combines the fixed Learn and cancellation stages:
+
+```text
+analysis buffer
+    |
+    v
+fundamental-frequency detection
+    |
+    v
+hum-presence classification
+    |
+    v
+harmonic estimation
+    |
+    v
+phase advancement to end of analysis window
+    |
+    v
+continuous reconstruction
+    |
+    v
+subtraction
+```
+
+An end-to-end test using the same 250 ms mixed-signal Learn window produced the
+same approximately `-52.18 dB` attenuation as the manually connected DSP
+components.
+
+This confirms that the orchestration layer does not materially change the
+behavior of the underlying detector, estimator, or reconstructor.
+
+Additional tests verify that:
+
+* unrelated audio does not activate cancellation
+* input is passed through unchanged when no hum is detected
+* resetting an active canceller disables the learned cancellation model
+* the inactive state remains exact pass-through
+
+### Learn Mode Analysis Buffer
+
+`LearnBuffer` collects the initial fixed-duration Learn Mode observation
+window across arbitrary host audio block sizes.
+
+For the current 250 ms target:
+
+```text
+numAnalysisSamples =
+    round(
+        sampleRate * 0.25
+    )
+```
+
+At 48 kHz this is 12000 samples.
+
+Testing verifies that:
+
+* samples remain continuous across arbitrary block boundaries
+* the final host block may exceed the remaining Learn window capacity
+* only the required portion of the final block is copied
+* samples arriving after collection completes do not overwrite the captured
+  analysis window
+* the preallocated buffer can be reused for another Learn pass
+
+The 250 ms duration remains an empirical starting point. It provided robust
+frequency detection and substantially improved mixed-signal harmonic
+estimation in the current synthetic experiments, but it should be reevaluated
+using recorded audio.
+
+### Remaining Learn Mode Integration Work
+
+The current fixed cancellation DSP has been validated independently of the
+plugin's realtime control flow.
+
+A completed Learn window still needs to be handed off for frequency detection
+and least-squares estimation without performing the expensive Learn operation
+directly inside the realtime audio callback.
+
+Audio will continue to advance while that analysis takes place, so production
+integration must also account for the number of samples elapsed between the
+start of the analyzed window and the eventual activation of the learned
+cancellation model.
+
+This realtime handoff and model-publication problem belongs to Learn Mode
+integration rather than the fixed harmonic subtraction primitive itself.

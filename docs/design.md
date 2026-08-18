@@ -69,16 +69,136 @@ Hum is currently considered detected when:
 
 The result therefore separates **frequency estimation** from **hum detection**: a best-fit frequency may still be returned even when the evidence is not strong enough to classify the input as hum.
 
+### HumReconstructor
+
+Reconstructs the estimated hum waveform from the harmonic model produced by
+`HumEstimator`.
+
+For each estimated harmonic, the reconstructor stores:
+
+* frequency
+* amplitude
+* normalized phase
+
+Each harmonic is synthesized using an `Oscillator`, and the harmonic outputs
+are summed to produce the estimated hum sample.
+
+The reconstructor can also begin synthesis at a sample offset relative to the
+start of the analysis window. This allows a model whose phase was estimated at
+analysis sample 0 to remain phase-aligned when cancellation begins after the
+analysis window has completed.
+
+The sample offset advances each harmonic according to its own frequency before
+reconstruction begins.
+
+### FixedHumCanceller
+
+Coordinates the fixed cancellation DSP path.
+
+Its current responsibilities are:
+
+1. Run `FundamentalFrequencyDetector` on a supplied analysis buffer.
+2. Reject the Learn result if the detector does not classify the signal as hum.
+3. Estimate harmonic amplitudes and phases using the detected fundamental.
+4. Initialize `HumReconstructor` at the sample immediately following the
+   analysis window.
+5. Subtract reconstructed hum from subsequent input samples.
+
+Conceptual flow:
+
+```text
+analysis buffer
+    |
+    v
+FundamentalFrequencyDetector
+    |
+    v
+hum detected?
+    |
+    +---- no ---> cancellation remains inactive
+    |
+    +---- yes
+            |
+            v
+      HumEstimator
+            |
+            v
+      harmonic model
+            |
+            v
+      HumReconstructor
+            |
+            v
+input sample - reconstructed hum
+            |
+            v
+       output sample
+```
+
+`FixedHumCanceller` keeps mathematical detection validity separate from hum
+classification. If Learn Mode completes successfully but no convincing hum is
+found, cancellation remains inactive and input samples pass through unchanged.
+
+Calling `reset()` clears the active cancellation state and returns the
+canceller to pass-through behavior.
+
+### LearnBuffer
+
+Collects the fixed-duration analysis window used by Learn Mode.
+
+The current analysis duration is:
+
+```text
+250 ms
+```
+
+At 48 kHz this corresponds to:
+
+```text
+12000 samples
+```
+
+The buffer size is calculated from the actual sample rate rather than
+hard-coded to 12000 samples.
+
+`LearnBuffer` is prepared ahead of time and then collects samples across
+arbitrary host block boundaries. Collection stops exactly when the configured
+analysis window is full, even if the final host block contains more samples
+than are required.
+
+The current design keeps allocation out of the collection path:
+
+* `prepare()` allocates the analysis buffer.
+* `start()` begins a new capture using the existing allocation.
+* `push()` copies samples into the preallocated buffer.
+* `reset()` clears collection state without reallocating.
+
+Once full, further calls to `push()` do not modify the captured analysis
+window.
+
+`LearnBuffer` currently handles capture only. The future handoff of a completed
+analysis window to non-realtime detection and estimation is intentionally a
+separate architectural concern.
+
 ## Real-Time Constraints
 
 DSP processing should avoid:
 
-- dynamic allocation
-- locks
-- UI access
-- unnecessary container resizing
+* dynamic allocation
+* locks
+* UI access
+* unnecessary container resizing
+* expensive Learn Mode analysis directly inside the realtime audio callback
 
 Fixed-size arrays are preferred for the known maximum harmonic count.
+
+Learn Mode capture should use memory allocated ahead of time. Frequency
+detection and least-squares model fitting are substantially more expensive than
+sample-by-sample reconstruction and subtraction and should eventually be
+performed outside the realtime audio callback.
+
+The realtime processing path should consume an already-learned cancellation
+model rather than perform model search or fitting for every block.
 
 ## Parameters and State
 
