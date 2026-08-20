@@ -84,6 +84,7 @@ target_sources(HumbugTests
         Tests/HumReconstructorTests.cpp
         Tests/FixedHumCancellerTests.cpp
         Tests/LearnBufferTests.cpp
+        Tests/HumAnalyzerTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
