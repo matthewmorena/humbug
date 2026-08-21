@@ -21,6 +21,10 @@ public:
         testTracksAbsoluteSamplePosition();
         testRecordsLearnStartPosition();
         testTimelineIncludesCaptureOvershootAndAnalysisDelay();
+        testCompletedCaptureCanBeClaimedOnce();
+        testLearnCannotRestartWhileBusy();
+        testAnalysisBufferRemainsFrozenWhileAudioContinues();
+        testBufferCanBeReusedAfterAnalysisFinishes();
     }
 
 private:
@@ -114,7 +118,9 @@ private:
                 )
         );
 
-        controller.startLearn();
+        expect(
+            controller.startLearn()
+        );
 
         expect(
             controller.isCollecting()
@@ -155,7 +161,9 @@ private:
             preRollBlock
         );
 
-        controller.startLearn();
+        expect(
+            controller.startLearn()
+        );
 
         expect(
             controller.isCollecting()
@@ -203,7 +211,7 @@ private:
         );
 
         expect(
-            controller.isReady()
+            controller.isReadyForAnalysis()
         );
 
         constexpr std::uint64_t
@@ -256,14 +264,7 @@ private:
         );
 
         expect(
-            controller.isReady()
-        );
-
-        expectEquals(
-            controller
-                .getAnalysisBuffer()
-                .getNumSamples(),
-            12000
+            controller.isReadyForAnalysis()
         );
 
         const auto elapsedAtActivation =
@@ -282,10 +283,10 @@ private:
         );
     }
 
-    void testResetPreservesSamplePosition()
+    void testCompletedCaptureCanBeClaimedOnce()
     {
         beginTest(
-            "Reset preserves absolute sample position"
+            "Completed capture can be claimed exactly once"
         );
 
         LearnModeController controller;
@@ -295,28 +296,363 @@ private:
             numChannels
         );
 
+        expect(
+            controller.startLearn()
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
         juce::AudioBuffer<float> block(
             numChannels,
-            512
+            analysisSamples
         );
 
         block.clear();
 
-        controller.processBlock(block);
-
-        controller.reset();
-
-        expect(
-            controller.getCurrentSamplePosition()
-                == static_cast<std::uint64_t>(512)
+        controller.processBlock(
+            block
         );
 
         expect(
-            !controller.isCollecting()
+            controller.isReadyForAnalysis()
         );
 
         expect(
-            !controller.isReady()
+            !controller.isAnalyzing()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        expect(
+            !controller.isReadyForAnalysis()
+        );
+
+        expect(
+            !controller.tryBeginAnalysis()
+        );
+    }
+
+    void testLearnCannotRestartWhileBusy()
+    {
+        beginTest(
+            "Learn cannot restart while controller is busy"
+        );
+
+        LearnModeController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        expect(
+            controller.startLearn()
+        );
+
+        expect(
+            !controller.startLearn()
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        juce::AudioBuffer<float> block(
+            numChannels,
+            analysisSamples
+        );
+
+        block.clear();
+
+        controller.processBlock(
+            block
+        );
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        // Capture is complete but has not yet
+        // been claimed by the worker.
+        expect(
+            !controller.startLearn()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        // Worker now owns the frozen buffer.
+        expect(
+            !controller.startLearn()
+        );
+    }
+
+    void testAnalysisBufferRemainsFrozenWhileAudioContinues()
+    {
+        beginTest(
+            "Analysis buffer remains frozen while audio continues"
+        );
+
+        LearnModeController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        expect(
+            controller.startLearn()
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        juce::AudioBuffer<float> captureBlock(
+            numChannels,
+            analysisSamples
+        );
+
+        auto* captureSamples =
+            captureBlock.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < analysisSamples;
+            ++sample
+        )
+        {
+            captureSamples[sample] =
+                static_cast<float>(sample)
+                / static_cast<float>(
+                    analysisSamples
+                );
+        }
+
+        controller.processBlock(
+            captureBlock
+        );
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        const auto& analysisBuffer =
+            controller.getAnalysisBuffer();
+
+        expectEquals(
+            analysisBuffer.getNumSamples(),
+            analysisSamples
+        );
+
+        const auto firstSample =
+            analysisBuffer.getSample(
+                0,
+                0
+            );
+
+        const auto middleSample =
+            analysisBuffer.getSample(
+                0,
+                analysisSamples / 2
+            );
+
+        const auto lastSample =
+            analysisBuffer.getSample(
+                0,
+                analysisSamples - 1
+            );
+
+        constexpr int realtimeBlockSize =
+            4096;
+
+        juce::AudioBuffer<float> realtimeBlock(
+            numChannels,
+            realtimeBlockSize
+        );
+
+        realtimeBlock.clear();
+
+        for (
+            int sample = 0;
+            sample < realtimeBlockSize;
+            ++sample
+        )
+        {
+            realtimeBlock.setSample(
+                0,
+                sample,
+                -0.75f
+            );
+        }
+
+        const auto positionBefore =
+            controller.getCurrentSamplePosition();
+
+        controller.processBlock(
+            realtimeBlock
+        );
+
+        controller.processBlock(
+            realtimeBlock
+        );
+
+        const auto positionAfter =
+            controller.getCurrentSamplePosition();
+
+        expect(
+            positionAfter
+                == positionBefore
+                + static_cast<std::uint64_t>(
+                    2 * realtimeBlockSize
+                )
+        );
+
+        expectEquals(
+            analysisBuffer.getSample(
+                0,
+                0
+            ),
+            firstSample
+        );
+
+        expectEquals(
+            analysisBuffer.getSample(
+                0,
+                analysisSamples / 2
+            ),
+            middleSample
+        );
+
+        expectEquals(
+            analysisBuffer.getSample(
+                0,
+                analysisSamples - 1
+            ),
+            lastSample
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+    }
+
+    void testBufferCanBeReusedAfterAnalysisFinishes()
+    {
+        beginTest(
+            "Buffer can be reused after analysis finishes"
+        );
+
+        LearnModeController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        const auto firstLearnStart =
+            controller.getCurrentSamplePosition();
+
+        expect(
+            controller.startLearn()
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        juce::AudioBuffer<float> firstCapture(
+            numChannels,
+            analysisSamples
+        );
+
+        firstCapture.clear();
+
+        controller.processBlock(
+            firstCapture
+        );
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        controller.finishAnalysis();
+
+        const auto secondLearnStart =
+            controller.getCurrentSamplePosition();
+
+        expect(
+            !controller.isAnalyzing()
+        );
+
+        expect(
+            !controller.isReadyForAnalysis()
+        );
+
+        expect(
+            controller.startLearn()
+        );
+
+        expect(
+            controller.getAnalysisStartSample()
+                == secondLearnStart
+        );
+
+        expect(
+            secondLearnStart
+                > firstLearnStart
+        );
+
+        expect(
+            secondLearnStart
+                == firstLearnStart
+                + static_cast<std::uint64_t>(
+                    analysisSamples
+                )
+        );
+
+        expect(
+            controller.isCollecting()
+        );
+
+        juce::AudioBuffer<float> secondCapture(
+            numChannels,
+            analysisSamples
+        );
+
+        secondCapture.clear();
+
+        controller.processBlock(
+            secondCapture
+        );
+
+        expect(
+            controller.isReadyForAnalysis()
         );
     }
 };
