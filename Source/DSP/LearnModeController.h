@@ -124,6 +124,18 @@ public:
         );
     }
 
+    void abortAnalysis() noexcept
+    {
+        jassert(
+            state.load()
+            == State::Analyzing
+        );
+
+        state.store(
+            State::Idle
+        );
+    }
+
     bool isModelReady() const noexcept
     {
         return state.load()
