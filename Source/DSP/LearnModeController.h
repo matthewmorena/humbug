@@ -13,7 +13,8 @@ public:
         Idle,
         Collecting,
         ReadyForAnalysis,
-        Analyzing
+        Analyzing,
+        ModelReady
     };
 
     void prepare(
@@ -107,8 +108,26 @@ public:
         );
 
         state.store(
+            State::ModelReady
+        );
+    }
+
+    void finishModelHandoff() noexcept
+    {
+        jassert(
+            state.load()
+            == State::ModelReady
+        );
+
+        state.store(
             State::Idle
         );
+    }
+
+    bool isModelReady() const noexcept
+    {
+        return state.load()
+            == State::ModelReady;
     }
 
     bool isCollecting() const noexcept

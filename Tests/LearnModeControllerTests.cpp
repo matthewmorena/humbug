@@ -24,7 +24,7 @@ public:
         testCompletedCaptureCanBeClaimedOnce();
         testLearnCannotRestartWhileBusy();
         testAnalysisBufferRemainsFrozenWhileAudioContinues();
-        testBufferCanBeReusedAfterAnalysisFinishes();
+        testBufferCanBeReusedAfterModelHandoffFinishes();
     }
 
 private:
@@ -555,10 +555,10 @@ private:
         );
     }
 
-    void testBufferCanBeReusedAfterAnalysisFinishes()
+    void testBufferCanBeReusedAfterModelHandoffFinishes()
     {
         beginTest(
-            "Buffer can be reused after analysis finishes"
+            "Buffer can be reused after model handoff finishes"
         );
 
         LearnModeController controller;
@@ -603,16 +603,26 @@ private:
 
         controller.finishAnalysis();
 
-        const auto secondLearnStart =
-            controller.getCurrentSamplePosition();
+        expect(
+            controller.isModelReady()
+        );
 
         expect(
             !controller.isAnalyzing()
         );
 
         expect(
-            !controller.isReadyForAnalysis()
+            !controller.startLearn()
         );
+
+        controller.finishModelHandoff();
+
+        expect(
+            !controller.isModelReady()
+        );
+
+        const auto secondLearnStart =
+            controller.getCurrentSamplePosition();
 
         expect(
             controller.startLearn()
