@@ -88,6 +88,7 @@ target_sources(HumbugTests
         Tests/LearnModeControllerTests.cpp
         Tests/LearnedHumModelMailboxTests.cpp
         Tests/HumAnalysisWorkerTests.cpp
+        Tests/RealTimeLearnIntegrationTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
