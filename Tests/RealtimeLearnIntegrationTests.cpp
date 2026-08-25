@@ -535,14 +535,6 @@ private:
 
         generator.clearHarmonics();
 
-        expect(
-            canceller.isActive()
-        );
-
-        expect(
-            controller.startLearn()
-        );
-
         generator.setHarmonicAmplitude(
             1,
             0.30f
@@ -790,6 +782,10 @@ private:
         controller.finishModelHandoff();
 
         generator.clearHarmonics();
+
+        expect(
+            canceller.isActive()
+        );
 
         expect(
             controller.startLearn()
