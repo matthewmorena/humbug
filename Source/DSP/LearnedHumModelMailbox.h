@@ -22,6 +22,14 @@ private:
     );
 
 public:
+    void reset() noexcept
+    {
+        state.store(
+            State::Empty,
+            std::memory_order_release
+        );
+    }
+
     bool publish(
         const PendingLearnResult& result
     ) noexcept

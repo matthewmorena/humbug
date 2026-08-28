@@ -20,7 +20,7 @@ HumbugAudioProcessorEditor::HumbugAudioProcessorEditor(
     );
 
     statusLabel.setText(
-        "Gain processor",
+        "Fixed hum cancellation",
         juce::dontSendNotification
     );
 
@@ -69,7 +69,66 @@ HumbugAudioProcessorEditor::HumbugAudioProcessorEditor(
         gainSlider
     );
 
+    addAndMakeVisible(
+        learnButton
+    );
+
+    learnButton.onClick =
+        [this]
+        {
+            audioProcessor.requestLearn();
+        };
+
+    timerCallback();
+
+    startTimerHz(
+        10
+    );
+
     setSize(500, 300);
+}
+
+void HumbugAudioProcessorEditor::timerCallback()
+{
+    const auto learnAvailable =
+        audioProcessor.isLearnAvailable();
+
+    const auto learnInProgress =
+        audioProcessor.isLearnInProgress();
+
+    if (!learnAvailable)
+    {
+        learnButton.setButtonText(
+            "Learn (Mono Only)"
+        );
+
+        learnButton.setEnabled(
+            false
+        );
+
+        return;
+    }
+
+    if (learnInProgress)
+    {
+        learnButton.setButtonText(
+            "Learning..."
+        );
+
+        learnButton.setEnabled(
+            false
+        );
+
+        return;
+    }
+
+    learnButton.setButtonText(
+        "Learn"
+    );
+
+    learnButton.setEnabled(
+        true
+    );
 }
 
 void HumbugAudioProcessorEditor::paint(
@@ -98,26 +157,40 @@ void HumbugAudioProcessorEditor::paint(
 
 void HumbugAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds().reduced(24);
+    auto bounds =
+        getLocalBounds()
+            .reduced(24);
 
     titleLabel.setBounds(
-        bounds.removeFromTop(60)
+        bounds.removeFromTop(50)
     );
 
     statusLabel.setBounds(
-        bounds.removeFromTop(30)
+        bounds.removeFromTop(24)
     );
 
-    bounds.removeFromTop(10);
+    bounds.removeFromTop(8);
 
-    auto gainArea = bounds.withSizeKeepingCentre(
-        140,
-        150
-    );
+    auto learnArea =
+        bounds.removeFromBottom(36);
+
+    bounds.removeFromBottom(12);
+
+    auto gainArea =
+        bounds.withSizeKeepingCentre(
+            120,
+            120
+        );
 
     gainLabel.setBounds(
         gainArea.removeFromTop(24)
     );
 
-    gainSlider.setBounds(gainArea);
+    gainSlider.setBounds(
+        gainArea
+    );
+
+    learnButton.setBounds(
+        learnArea
+    );
 }

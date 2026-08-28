@@ -5,7 +5,8 @@
 #include "PluginProcessor.h"
 
 class HumbugAudioProcessorEditor final
-    : public juce::AudioProcessorEditor
+    : public juce::AudioProcessorEditor,
+      private juce::Timer
 {
 public:
     explicit HumbugAudioProcessorEditor(
@@ -17,6 +18,8 @@ public:
     void paint(juce::Graphics& graphics) override;
     void resized() override;
 
+    void timerCallback() override;
+
 private:
     HumbugAudioProcessor& audioProcessor;
 
@@ -25,6 +28,10 @@ private:
 
     juce::Slider gainSlider;
     juce::Label gainLabel;
+
+    juce::TextButton learnButton {
+        "Learn"
+    };
 
     std::unique_ptr<
         juce::AudioProcessorValueTreeState::SliderAttachment

@@ -300,6 +300,23 @@ void HumbugAudioProcessor::requestLearn() noexcept
     );
 }
 
+bool HumbugAudioProcessor::isLearnAvailable() const noexcept
+{
+    return getTotalNumInputChannels() == 1;
+}
+
+bool HumbugAudioProcessor::isLearnInProgress() const noexcept
+{
+    return
+        learnRequested.load(
+            std::memory_order_acquire
+        )
+        || learnModeController.isCollecting()
+        || learnModeController.isReadyForAnalysis()
+        || learnModeController.isAnalyzing()
+        || learnModeController.isModelReady();
+}
+
 juce::AudioProcessorValueTreeState &
 HumbugAudioProcessor::getParameterState() noexcept
 {

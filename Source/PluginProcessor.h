@@ -52,6 +52,9 @@ juce::MidiBuffer& midiMessages
 
 void requestLearn() noexcept;
 
+bool isLearnAvailable() const noexcept;
+bool isLearnInProgress() const noexcept;
+
 juce::AudioProcessorEditor* createEditor() override;
 
 bool hasEditor() const override;
