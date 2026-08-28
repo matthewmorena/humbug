@@ -474,46 +474,6 @@ affects not only fundamental-frequency detection but also the accuracy of
 harmonic parameter estimation in the presence of coherent out-of-model
 content.
 
-### FixedHumCanceller
-
-`FixedHumCanceller` combines the fixed Learn and cancellation stages:
-
-```text
-analysis buffer
-    |
-    v
-fundamental-frequency detection
-    |
-    v
-hum-presence classification
-    |
-    v
-harmonic estimation
-    |
-    v
-phase advancement to end of analysis window
-    |
-    v
-continuous reconstruction
-    |
-    v
-subtraction
-```
-
-An end-to-end test using the same 250 ms mixed-signal Learn window produced the
-same approximately `-52.18 dB` attenuation as the manually connected DSP
-components.
-
-This confirms that the orchestration layer does not materially change the
-behavior of the underlying detector, estimator, or reconstructor.
-
-Additional tests verify that:
-
-* unrelated audio does not activate cancellation
-* input is passed through unchanged when no hum is detected
-* resetting an active canceller disables the learned cancellation model
-* the inactive state remains exact pass-through
-
 ### Learn Mode Analysis Buffer
 
 `LearnBuffer` collects the initial fixed-duration Learn Mode observation
@@ -544,19 +504,217 @@ frequency detection and substantially improved mixed-signal harmonic
 estimation in the current synthetic experiments, but it should be reevaluated
 using recorded audio.
 
-### Remaining Learn Mode Integration Work
+## Fixed Harmonic Cancellation
 
-The current fixed cancellation DSP has been validated independently of the
-plugin's realtime control flow.
+Once a valid hum model has been estimated, Humbug reconstructs the fitted
+harmonics and subtracts them from the input:
 
-A completed Learn window still needs to be handed off for frequency detection
-and least-squares estimation without performing the expensive Learn operation
-directly inside the realtime audio callback.
+```text
+output[n] =
+    input[n] - estimatedHum[n]
+```
 
-Audio will continue to advance while that analysis takes place, so production
-integration must also account for the number of samples elapsed between the
-start of the analyzed window and the eventual activation of the learned
-cancellation model.
+The realtime `FixedHumCanceller` does not perform frequency detection or
+least-squares estimation itself. Analysis is handled separately by
+`HumAnalyzer`, while `FixedHumCanceller` owns only the active reconstruction
+state used by the audio thread.
 
-This realtime handoff and model-publication problem belongs to Learn Mode
-integration rather than the fixed harmonic subtraction primitive itself.
+This separation allows expensive Learn analysis to occur on a worker thread
+without concurrently modifying realtime reconstruction state.
+
+### Phase Continuation
+
+The phase returned by `HumEstimator` describes the fitted signal relative to
+the beginning of the Learn analysis window.
+
+Cancellation generally begins substantially later:
+
+```text
+analysis begins
+    ↓
+250 ms captured
+    ↓
+background analysis
+    ↓
+model publication
+    ↓
+next audio block boundary
+    ↓
+cancellation activates
+```
+
+The reconstruction model must therefore be advanced by the complete number of
+samples elapsed since the beginning of analysis.
+
+The current phase offset is:
+
+```text
+sampleOffset =
+    activationSample
+    - analysisStartSample
+```
+
+This automatically accounts for the analysis window, host-block overshoot,
+worker latency, and any additional audio blocks processed before activation.
+
+Synthetic regression tests intentionally introduce delayed activation and
+confirm that the model remains phase aligned.
+
+### Realtime Learn Analysis
+
+Learn capture uses a preallocated 250 ms buffer.
+
+Once capture completes, the buffer is frozen and transferred logically to a
+background `HumAnalysisWorker`. The worker performs:
+
+```text
+FundamentalFrequencyDetector
++
+HumEstimator
+```
+
+and produces a fixed-size `LearnedHumModel`.
+
+A single-slot lock-free mailbox publishes the completed result to the audio
+thread. The audio thread consumes and activates the model at a host-block
+boundary.
+
+The worker never modifies the active realtime canceller.
+
+### Processor-Level Cancellation Tests
+
+The complete production path has been tested through
+`HumbugAudioProcessor::processBlock()` rather than only through isolated DSP
+components.
+
+An ideal processor-generated harmonic hum test produced approximately:
+
+```text
+baseline RMS: 0.0387299
+post-cancellation RMS: ~7e-10
+attenuation: -154 dB
+```
+
+This is an intentionally ideal, model-compatible synthetic case. Permanent
+regression thresholds remain much more conservative and should not be tightened
+to the observed numerical floor.
+
+Processor tests also verify relearning behavior:
+
+```text
+active hum model
+    ↓
+source hum disappears
+    ↓
+new Learn captures raw no-hum input
+    ↓
+analysis reports humDetected == false
+    ↓
+previous cancellation model is disabled
+    ↓
+exact pass-through
+```
+
+Capturing raw input before cancellation is important. Otherwise a relearn
+while an old model is active could analyze the cancellation signal generated
+by the plugin rather than the actual source.
+
+## Initial DAW and Real-World Signal Testing
+
+Realtime Learn Mode was tested manually in Studio One 5.
+
+A generated signal containing independent 60 Hz, 120 Hz, and 180 Hz components
+was routed to a mono bus containing Humbug.
+
+A representative Learn result was:
+
+```text
+frequency:           59.99992245 Hz
+explainedFraction:   0.99999996
+supportedHarmonics:  3
+humDetected:         true
+```
+
+The generated hum was initially cancelled very strongly.
+
+Electric-guitar testing also produced successful positive hum detections.
+Representative consecutive Learn results were:
+
+```text
+59.98289918 Hz
+59.97788728 Hz
+```
+
+Relearning generally restored or improved cancellation after the original
+model began to lose effectiveness.
+
+### Fixed-Frequency Phase Drift
+
+Manual testing exposed an important limitation of fixed reconstruction.
+
+If the learned fundamental is:
+
+```text
+f_est
+```
+
+and the actual source is:
+
+```text
+f_actual
+```
+
+then the frequency error is:
+
+```text
+deltaF =
+    f_est - f_actual
+```
+
+The phase error grows continuously with time:
+
+```text
+phaseErrorCycles(t) =
+    deltaF * t
+```
+
+For harmonic `k`, the error grows `k` times faster:
+
+```text
+phaseErrorCycles_k(t) =
+    k * deltaF * t
+```
+
+Therefore even a very small fundamental-frequency error eventually causes the
+reconstructed signal to move out of phase with the source, with the highest
+modeled harmonics degrading first.
+
+The generated 60/120/180 Hz test signal was estimated at approximately
+`59.999922 Hz`. Although this differs from nominal 60 Hz by less than
+`0.0001 Hz`, cancellation still degrades eventually because that error
+accumulates indefinitely.
+
+Real guitar hum showed substantially larger variation between consecutive
+Learn estimates and correspondingly lost cancellation more quickly.
+
+These results are consistent with the realtime phase-offset mechanism functioning 
+as intended: the highly stable synthetic signal remains aligned much longer than 
+the less stationary real-world guitar hum.
+
+### Implication for Adaptive Tracking
+
+The next DSP milestone should not simply snap detected frequencies to exactly
+50 or 60 Hz. Real mains-related interference may legitimately differ from its
+nominal frequency, and forcing a nominal value could increase phase drift.
+
+Instead, future adaptive processing should track gradual changes in:
+
+* fundamental frequency
+* harmonic amplitude
+* harmonic phase
+
+while smoothly updating realtime reconstruction state without producing
+audible discontinuities.
+
+The current fixed Learn Mode provides the initialization model for that future
+tracking process.
