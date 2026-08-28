@@ -211,3 +211,287 @@ Completed the standalone Fixed Harmonic Subtraction path and began laying the gr
 * Ran the full test suite successfully after the Fixed Harmonic Subtraction work.
 
 Fixed Harmonic Subtraction is now functionally complete as a standalone DSP milestone. The next major task is realtime Learn Mode integration: collecting the analysis window in the plugin, performing the more expensive detection/estimation work outside the realtime audio callback, and safely activating the resulting cancellation model while audio continues processing.
+
+## 8/19/26 — Realtime Learn Mode Integration
+
+Began the Realtime Learn Mode Integration milestone by separating expensive Learn analysis from realtime cancellation state.
+
+### Analysis / cancellation separation
+
+Added a fixed-size `LearnedHumModel` value type containing:
+
+* estimated harmonic parameters
+* detected fundamental frequency
+* `valid` analysis status
+* `humDetected` classification status
+
+Added `HumAnalyzer` to own the non-realtime Learn analysis path:
+
+```text
+analysis buffer
+    ↓
+FundamentalFrequencyDetector
+    ↓
+HumEstimator
+    ↓
+LearnedHumModel
+```
+
+Added tests verifying that `HumAnalyzer`:
+
+* correctly detects and estimates a 60 Hz harmonic hum from a mixed 997 Hz + hum signal
+* preserves the distinction between a valid analysis and actual hum detection
+* returns an empty harmonic model when no hum is classified
+
+### FixedHumCanceller refactor
+
+Refactored `FixedHumCanceller` so it no longer performs detection or harmonic estimation.
+
+The canceller now consumes a previously learned model through an explicit activation step:
+
+```text
+LearnedHumModel
+    ↓
+FixedHumCanceller::activateModel()
+    ↓
+HumReconstructor
+    ↓
+reconstruct + subtract
+```
+
+This separates worker-side analysis from the realtime reconstruction state that will eventually be owned exclusively by the audio thread.
+
+Updated `HumReconstructor` phase-offset handling to use a 64-bit sample offset in preparation for long-running absolute sample tracking.
+
+Refactored the existing `FixedHumCanceller` tests to use the new `HumAnalyzer` → `LearnedHumModel` → `activateModel()` flow. Existing cancellation, no-hum pass-through, and reset behavior remain unchanged.
+
+### Delayed model activation
+
+Added a regression test for delayed model activation.
+
+The test:
+
+```text
+captures a 12000-sample / 250 ms Learn window
+→ introduces an additional 317-sample simulated analysis delay
+→ activates the learned model at sample 12317
+→ begins cancellation from that point
+```
+
+The 317-sample delay intentionally represents a non-integer fraction of a 60 Hz cycle.
+
+Measured cancellation remained phase-aligned:
+
+```text
+Hum RMS before: 0.2392327508
+Hum RMS after:  0.0005151873
+Attenuation:    -53.34 dB
+```
+
+This verifies that cancellation no longer needs to begin immediately after the analysis window. An explicit elapsed-sample offset can correctly advance the learned harmonic phases to a later point on the audio timeline.
+
+### LearnModeController / absolute sample timeline
+
+Added `LearnModeController` as the first coordinator for realtime Learn capture.
+
+The controller currently owns:
+
+```text
+LearnBuffer
+absolute processed-sample count
+analysis-start sample position
+```
+
+It does not yet contain a worker thread, analyzer, canceller, or cross-thread synchronization.
+
+Added tests verifying:
+
+* absolute sample position advances across arbitrary host blocks
+* Learn start records the current absolute sample position
+* final-block overshoot remains part of the realtime timeline even though `LearnBuffer` stops exactly at 12000 captured samples
+* the sample timeline continues advancing while a completed Learn buffer waits through simulated analysis latency
+* resetting Learn capture preserves the monotonically increasing absolute sample position
+
+A representative overshoot case now distinguishes:
+
+```text
+Learn samples captured: 12000
+Realtime samples elapsed: 12288
+```
+
+and additional simulated worker delay continues to increase the eventual activation offset.
+
+This establishes the timing relationship needed for future model activation:
+
+```text
+sampleOffset
+    =
+activationSample
+    -
+analysisStartSample
+```
+
+All tests pass.
+
+### Next
+
+The next step is to design ownership and handoff of the completed analysis buffer so that:
+
+* the audio thread can continue processing without blocking
+* a worker can safely read a completed Learn capture
+* a new Learn operation cannot overwrite memory still being analyzed
+* allocation and locking remain outside the realtime audio path
+
+The initial design will likely use separate preallocated capture and analysis storage with only one outstanding Learn operation allowed at a time.
+
+## 8/20/26 — Realtime Learn Mode Buffer Handoff and Worker Analysis
+
+Continued Realtime Learn Mode integration by establishing safe ownership boundaries between the audio and analysis sides.
+
+Expanded `LearnModeController` with an explicit lifecycle:
+
+```text
+Idle
+→ Collecting
+→ ReadyForAnalysis
+→ Analyzing
+→ ModelReady
+→ Idle
+```
+
+The completed `LearnBuffer` remains frozen while analysis owns it, allowing realtime audio and the absolute sample timeline to continue without overwriting the captured Learn window. Tests now verify exclusive buffer claiming, rejection of new Learn requests while busy, frozen-buffer behavior during continued audio processing, and safe reuse after model handoff.
+
+Added a fixed-size `PendingLearnResult` and lock-free `LearnedHumModelMailbox` for publishing learned models back toward the audio thread. The mailbox uses explicit ownership states to prevent unread results from being overwritten or producer/consumer access from overlapping.
+
+Added `HumAnalysisWorker`, which runs `HumAnalyzer` on a JUCE background thread. The audio thread only publishes the completed capture state; the worker periodically claims ready captures, performs frequency detection and harmonic estimation, publishes the resulting model and original `analysisStartSample`, and transitions the controller to `ModelReady`.
+
+Worker tests now verify:
+
+* successful background analysis of a hum-containing Learn capture
+* publication of valid no-hum results
+* preservation of Learn-start timeline metadata
+* multiple consecutive Learn operations through the same controller, worker, and mailbox
+
+All tests pass.
+
+Next step is to connect mailbox consumption to `FixedHumCanceller::activateModel()` and verify phase-correct cancellation using the real elapsed sample offset produced while background analysis is running.
+
+## 8/21/26–8/23/26 — Realtime Learn Integration Tests
+
+Added end-to-end integration coverage for the Realtime Learn Mode architecture.
+
+The first integration test now exercises the complete asynchronous Learn path:
+
+```text
+continuous mixed signal
+→ LearnBuffer capture
+→ background HumAnalysisWorker
+→ LearnedHumModelMailbox
+→ block-boundary model consumption
+→ absolute sample-offset calculation
+→ FixedHumCanceller activation
+```
+
+The test keeps the synthetic hum phase continuous across pre-roll, Learn capture, background-analysis latency, and cancellation. Audio continues advancing while the worker runs, so the eventual activation point is intentionally nondeterministic.
+
+The learned model is activated using:
+
+```text
+sampleOffset
+    =
+activationSample
+    -
+analysisStartSample
+```
+
+and remains phase aligned even after a large simulated realtime delay. Repeated runs produced roughly `-48 dB` of cancellation while the activation sample varied, confirming that cancellation does not depend on a fixed analysis delay.
+
+Added a second integration test covering relearning while cancellation is already active:
+
+```text
+learn hum
+→ activate cancellation
+→ hum disappears
+→ relearn from raw input
+→ worker reports valid/no-hum result
+→ old cancellation model disabled
+→ exact pass-through
+```
+
+The test also preserves the intended processor ordering by capturing raw input before applying the currently active canceller.
+
+Together, these tests now validate both major end-to-end Realtime Learn behaviors:
+
+* asynchronous Learn followed by phase-correct cancellation
+* asynchronous relearn capable of disabling a stale cancellation model
+
+All tests pass.
+
+### Next
+
+Begin integrating the tested Learn controller, analysis worker, model mailbox, and fixed canceller into `PluginProcessor`, with learned models consumed and activated at host block boundaries.
+
+## 8/24/26–8/28/26 — Realtime Learn Mode Processor Integration
+
+Completed the initial Realtime Learn Mode integration and connected the previously isolated Learn architecture to the production `PluginProcessor` path.
+
+`PluginProcessor` now owns the Learn controller, background analysis worker, learned-model mailbox, and fixed hum canceller. Learn requests are submitted through an atomic request flag and accepted by the audio thread at a host-block boundary rather than directly from the UI/message thread.
+
+The realtime processing order is now:
+
+```text
+consume completed Learn result
+→ handle pending Learn request
+→ capture raw input
+→ apply fixed hum cancellation
+→ apply output gain
+```
+
+Completed learned models are consumed from the mailbox at block boundaries and activated using the absolute elapsed sample offset:
+
+```text
+sampleOffset =
+    activationSample
+    - analysisStartSample
+```
+
+This preserves reconstruction phase across the Learn window, worker-thread analysis time, host-block overshoot, and any additional audio processed before activation.
+
+Added processor-level integration tests covering the complete production path. Tests verify that:
+
+* a user Learn request starts capture through `PluginProcessor`
+* background analysis publishes and activates a model automatically
+* fixed cancellation is phase aligned when activated later
+* relearning from a no-hum signal disables a previously active cancellation model
+* raw input is captured before the active canceller modifies the output
+
+The ideal processor-generated synthetic hum test produced approximately `-154 dB` attenuation, while regression requirements remain intentionally more conservative.
+
+Added an initial user-facing **Learn** button. The editor polls processor status rather than receiving callbacks from the audio thread. Learn is currently available only for mono processing; stereo instances display the control as unavailable until a stereo cancellation policy is implemented.
+
+Performed the first manual DAW validation in Studio One 5 using both electric-guitar hum and generated 60/120/180 Hz test tones.
+
+A generated three-harmonic test signal was detected at approximately:
+
+```text
+59.999922 Hz
+explainedFraction ≈ 1.0
+supportedHarmonics = 3
+```
+
+and was initially cancelled very strongly.
+
+Real guitar hum was also successfully detected and reduced, with repeated Learn passes producing estimates near:
+
+```text
+59.9829 Hz
+59.9779 Hz
+```
+
+Listening tests exposed the expected limitation of the current fixed model: cancellation gradually loses effectiveness as the reconstructed oscillator drifts in phase relative to the source. The effect occurs much more slowly with the stable generated signal than with real guitar hum.
+
+This provides the first real-world evidence motivating the upcoming adaptive-tracking milestone rather than indicating a failure of the realtime Learn handoff itself.
+
+### Next
+
+Document the completed Realtime Learn Mode milestone and begin designing adaptive tracking for gradual frequency, amplitude, and phase changes.

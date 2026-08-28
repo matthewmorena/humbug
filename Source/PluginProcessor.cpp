@@ -7,20 +7,29 @@ HumbugAudioProcessor::HumbugAudioProcessor()
               .withInput(
                   "Input",
                   juce::AudioChannelSet::stereo(),
-                  true)
-
+                  true
+              )
               .withOutput(
                   "Output",
                   juce::AudioChannelSet::stereo(),
-                  true)),
+                  true
+              )
+      ),
       parameterState(
           *this,
           nullptr,
           "Parameters",
-          createParameterLayout())
+          createParameterLayout()
+      ),
+      humAnalysisWorker(
+          learnModeController,
+          learnedModelMailbox
+      )
 {
     gainParameter = parameterState.getRawParameterValue(
-        ParameterIDs::gain);
+        ParameterIDs::gain
+    );
+
     jassert(gainParameter != nullptr);
 }
 
@@ -28,11 +37,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout
 HumbugAudioProcessor::createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
+
     const auto gainAttributes =
         juce::AudioParameterFloatAttributes()
             .withLabel("dB")
             .withCategory(
                 juce::AudioProcessorParameter::outputGain);
+
     layout.add(
         std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{
@@ -45,6 +56,7 @@ HumbugAudioProcessor::createParameterLayout()
                 0.1f},
             0.0f,
             gainAttributes));
+
     return layout;
 }
 
@@ -53,6 +65,36 @@ void HumbugAudioProcessor::prepareToPlay(
     int samplesPerBlock
 )
 {
+    humAnalysisWorker.stop();
+
+    learnedModelMailbox.reset();
+
+    learnModeController.prepare(
+        sampleRate,
+        getTotalNumInputChannels()
+    );
+
+    fixedHumCanceller.prepare(
+        sampleRate
+    );
+
+    humAnalysisWorker.prepare(
+        sampleRate,
+        0
+    );
+
+    learnRequested.store(
+        false,
+        std::memory_order_release
+    );
+
+    const auto workerStarted =
+        humAnalysisWorker.start();
+
+    jassert(
+        workerStarted
+    );
+
     const juce::dsp::ProcessSpec processSpec {
         sampleRate,
         static_cast<juce::uint32>(samplesPerBlock),
@@ -96,6 +138,14 @@ void HumbugAudioProcessor::setSyntheticHumEnabled(
 
 void HumbugAudioProcessor::releaseResources()
 {
+    humAnalysisWorker.stop();
+
+    learnRequested.store(
+        false,
+        std::memory_order_release
+    );
+
+    fixedHumCanceller.reset();
 }
 
 bool HumbugAudioProcessor::isBusesLayoutSupported(
@@ -137,8 +187,97 @@ void HumbugAudioProcessor::processBlock(
             buffer.getNumSamples());
     }
 
+    if (
+        learnModeController.isModelReady()
+    )
+    {
+        PendingLearnResult result;
+
+        if (
+            learnedModelMailbox.tryConsume(
+                result
+            )
+        )
+        {
+            const auto activationSample =
+                learnModeController
+                    .getCurrentSamplePosition();
+
+            jassert(
+                activationSample
+                    >= result.analysisStartSample
+            );
+
+            const auto sampleOffset =
+                activationSample
+                - result.analysisStartSample;
+
+            fixedHumCanceller.activateModel(
+                result.model,
+                sampleOffset
+            );
+
+            learnModeController
+                .finishModelHandoff();
+        }
+        else
+        {
+            jassertfalse;
+        }
+    }
+
+    // Begin requested Learn operations only on the audio thread.
+    if (
+        totalInputChannels == 1
+        && learnRequested.load(
+            std::memory_order_acquire
+        )
+    )
+    {
+        if (
+            learnModeController.startLearn()
+        )
+        {
+            learnRequested.store(
+                false,
+                std::memory_order_release
+            );
+        }
+    }
+
+    // Development-only hum injection.
     if (syntheticHumEnabled)
-        humGenerator.addToBuffer(buffer);
+    {
+        humGenerator.addToBuffer(
+            buffer
+        );
+    }
+
+    // Capture raw input before cancellation.
+    learnModeController.processBlock(
+        buffer
+    );
+
+    // Initial integration is mono-only.
+    if (
+        totalInputChannels == 1
+    )
+    {
+        auto* channelData =
+            buffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < buffer.getNumSamples();
+            ++sample
+        )
+        {
+            channelData[sample] =
+                fixedHumCanceller.processSample(
+                    channelData[sample]
+                );
+        }
+    }
 
     gainProcessor.setGainDecibels(
         gainParameter->load());
@@ -151,6 +290,31 @@ void HumbugAudioProcessor::processBlock(
             audioBlock);
 
     gainProcessor.process(context);
+}
+
+void HumbugAudioProcessor::requestLearn() noexcept
+{
+    learnRequested.store(
+        true,
+        std::memory_order_release
+    );
+}
+
+bool HumbugAudioProcessor::isLearnAvailable() const noexcept
+{
+    return getTotalNumInputChannels() == 1;
+}
+
+bool HumbugAudioProcessor::isLearnInProgress() const noexcept
+{
+    return
+        learnRequested.load(
+            std::memory_order_acquire
+        )
+        || learnModeController.isCollecting()
+        || learnModeController.isReadyForAnalysis()
+        || learnModeController.isAnalyzing()
+        || learnModeController.isModelReady();
 }
 
 juce::AudioProcessorValueTreeState &

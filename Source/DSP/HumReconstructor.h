@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cmath>
+#include <cstdint>
 
 class HumReconstructor
 {
@@ -20,7 +21,7 @@ public:
 
     void setModel(
         const HumEstimator::Result& model,
-        std::size_t sampleOffset = 0
+        std::uint64_t sampleOffset = 0
     ) noexcept
     {
         const auto elapsedSeconds =

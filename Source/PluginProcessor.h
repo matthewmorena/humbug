@@ -5,6 +5,10 @@
 #include <atomic>
 
 #include "DSP/HumGenerator.h"
+#include "DSP/FixedHumCanceller.h"
+#include "DSP/HumAnalysisWorker.h"
+#include "DSP/LearnedHumModelMailbox.h"
+#include "DSP/LearnModeController.h"
 
 namespace ParameterIDs
 {
@@ -45,6 +49,11 @@ juce::AudioBuffer<float>& buffer,
 juce::MidiBuffer& midiMessages
 
 ) override;
+
+void requestLearn() noexcept;
+
+bool isLearnAvailable() const noexcept;
+bool isLearnInProgress() const noexcept;
 
 juce::AudioProcessorEditor* createEditor() override;
 
@@ -105,12 +114,28 @@ createParameterLayout();
 
 juce::AudioProcessorValueTreeState parameterState;
 
-std::atomic<float>* gainParameter = nullptr;
+std::atomic<float>* gainParameter = 
+    nullptr;
 
 HumGenerator humGenerator;
+
+LearnModeController learnModeController;
+
+LearnedHumModelMailbox learnedModelMailbox;
+
+HumAnalysisWorker humAnalysisWorker;
+
+FixedHumCanceller fixedHumCanceller;
+
 juce::dsp::Gain<float> gainProcessor;
 
-bool syntheticHumEnabled = false;
+std::atomic<bool> learnRequested {
+    false
+};
+
+std::atomic<bool> syntheticHumEnabled {
+    false
+};
 
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
 

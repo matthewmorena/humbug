@@ -2,16 +2,61 @@
 
 ## Processing Architecture
 
-Current conceptual processing path:
+The current realtime processor path is:
 
+```text
 Input
-  -> hum analysis / estimation
-  -> hum reconstruction and subtraction
-  -> output gain
-  -> Output
+  |
+  +----> Learn capture while collecting
+  |
+  v
+Fixed hum cancellation when active
+  |
+  v
+Output gain
+  |
+  v
+Output
+```
 
-Synthetic hum generation is a development and testing utility rather than
-part of the normal production signal path.
+Learn analysis is deliberately separated from realtime cancellation.
+
+```text
+AUDIO THREAD
+
+raw input
+    |
+    v
+LearnModeController / LearnBuffer
+    |
+    | completed analysis window
+    v
+
+ANALYSIS WORKER
+
+HumAnalyzer
+    |
+    +--> FundamentalFrequencyDetector
+    |
+    +--> HumEstimator
+    |
+    v
+LearnedHumModel
+    |
+    v
+LearnedHumModelMailbox
+    |
+    v
+
+AUDIO THREAD
+
+consume result at block boundary
+    |
+    v
+FixedHumCanceller
+```
+
+Synthetic hum generation remains a development and testing utility rather than part of the normal production signal path.
 
 ## DSP Components
 
@@ -93,54 +138,38 @@ reconstruction begins.
 
 ### FixedHumCanceller
 
-Coordinates the fixed cancellation DSP path.
+Owns the realtime fixed-cancellation path.
 
-Its current responsibilities are:
+`FixedHumCanceller` no longer performs frequency detection or harmonic estimation. It consumes an already-learned `LearnedHumModel` produced by the background analysis path.
 
-1. Run `FundamentalFrequencyDetector` on a supplied analysis buffer.
-2. Reject the Learn result if the detector does not classify the signal as hum.
-3. Estimate harmonic amplitudes and phases using the detected fundamental.
-4. Initialize `HumReconstructor` at the sample immediately following the
-   analysis window.
-5. Subtract reconstructed hum from subsequent input samples.
+Its responsibilities are:
+
+1. Accept a learned harmonic model and elapsed sample offset.
+2. Initialize `HumReconstructor` at the correct continuation phase.
+3. Subtract the reconstructed hum from subsequent realtime input samples.
+4. Remain in pass-through mode when no valid hum model is active.
 
 Conceptual flow:
 
 ```text
-analysis buffer
-    |
-    v
-FundamentalFrequencyDetector
-    |
-    v
-hum detected?
-    |
-    +---- no ---> cancellation remains inactive
-    |
-    +---- yes
-            |
-            v
-      HumEstimator
-            |
-            v
-      harmonic model
-            |
-            v
-      HumReconstructor
-            |
-            v
+LearnedHumModel
+      |
+      v
+activateModel(model, sampleOffset)
+      |
+      v
+HumReconstructor
+      |
+      v
 input sample - reconstructed hum
-            |
-            v
-       output sample
+      |
+      v
+output sample
 ```
 
-`FixedHumCanceller` keeps mathematical detection validity separate from hum
-classification. If Learn Mode completes successfully but no convincing hum is
-found, cancellation remains inactive and input samples pass through unchanged.
+Activating a model first clears the previous cancellation state. If the new Learn result is invalid or reports that no hum was detected, the canceller remains inactive and input passes through unchanged.
 
-Calling `reset()` clears the active cancellation state and returns the
-canceller to pass-through behavior.
+Calling `reset()` also clears the active model and returns the canceller to pass-through behavior.
 
 ### LearnBuffer
 
@@ -173,12 +202,9 @@ The current design keeps allocation out of the collection path:
 * `push()` copies samples into the preallocated buffer.
 * `reset()` clears collection state without reallocating.
 
-Once full, further calls to `push()` do not modify the captured analysis
-window.
-
-`LearnBuffer` currently handles capture only. The future handoff of a completed
-analysis window to non-realtime detection and estimation is intentionally a
-separate architectural concern.
+Once the buffer is full, `LearnModeController` freezes it for read-only access 
+by the background analysis worker. The audio thread does not reuse the buffer 
+until the current Learn operation has completed its model handoff.
 
 ## Real-Time Constraints
 
@@ -207,3 +233,104 @@ parameters, editor controls, and serialized plugin state.
 
 Synthetic hum injection is disabled by default and is currently exposed only
 as a development/testing mechanism.
+
+### HumAnalyzer
+
+Coordinates the non-realtime analysis of a completed Learn window.
+
+`HumAnalyzer` first runs `FundamentalFrequencyDetector`. If the analysis is valid and convincing hum is detected, it then runs `HumEstimator` at the detected fundamental frequency and produces a `LearnedHumModel`.
+
+The analyzer is designed to run outside the realtime audio callback.
+
+### LearnModeController
+
+Coordinates Learn capture and the lifetime of the shared analysis buffer.
+
+The current lifecycle is:
+
+```text
+Idle
+  ↓
+Collecting
+  ↓
+ReadyForAnalysis
+  ↓
+Analyzing
+  ↓
+ModelReady
+  ↓
+Idle
+```
+
+Only one Learn operation may be outstanding at a time.
+
+The controller also owns the monotonically increasing audio-sample timeline used to preserve reconstruction phase across asynchronous analysis.
+
+### HumAnalysisWorker
+
+Runs `HumAnalyzer` on a background `juce::Thread`.
+
+The worker polls for a completed analysis window, claims it through `LearnModeController`, performs detection and estimation, and publishes the resulting model through `LearnedHumModelMailbox`.
+
+The worker never activates or modifies the realtime canceller.
+
+### LearnedHumModelMailbox
+
+Provides a fixed-size single-slot handoff between the analysis worker and audio thread.
+
+The worker is the producer and the audio thread is the consumer.
+
+The mailbox uses atomic state transitions rather than locks or dynamic allocation. A result must be consumed before another result can be published.
+
+### Realtime Learn Mode
+
+User Learn requests are submitted through an atomic request flag.
+
+The message thread does not call `LearnModeController::startLearn()` directly. Instead, the next audio block accepts the request and begins capture at a defined block boundary.
+
+When Learn begins:
+
+```text
+analysisStartSample =
+    current audio sample position
+```
+
+Audio continues processing while the 250 ms analysis window is collected and while background analysis runs.
+
+When a completed model is later consumed at the beginning of a host block:
+
+```text
+sampleOffset =
+    activationSample
+    - analysisStartSample
+```
+
+The offset includes:
+
+* the analysis window itself
+* unused samples in the host block that completed capture
+* audio processed while the worker performs analysis
+* any additional block-boundary delay before activation
+
+The model is activated only on the audio thread.
+
+### Thread Ownership
+
+The current ownership rules are:
+
+* the audio thread writes the Learn buffer while collecting
+* the analysis buffer is frozen after capture completes
+* the worker receives read-only access while analyzing
+* the worker publishes only a fixed-size learned result
+* the audio thread owns cancellation-model activation
+* the editor communicates with the processor through thread-safe request/status APIs rather than accessing Learn DSP state directly
+
+### Channel Policy
+
+Realtime Learn and fixed cancellation are currently supported only for mono processing.
+
+`FixedHumCanceller` owns one reconstruction timeline. Calling the same canceller sequentially for multiple channels would advance that timeline more than once per sample frame and break phase alignment.
+
+Stereo cancellation therefore requires an explicit multi-channel design and is intentionally deferred rather than being handled implicitly.
+
+The current user-facing Learn control is disabled for stereo instances.
