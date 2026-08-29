@@ -23,6 +23,7 @@ public:
     {
         testActivatesAndCancelsHumFromMixedSignal();
         testDelayedActivationRemainsPhaseAligned();
+        testFixedModelLosesAlignmentUnderFrequencyDrift();
         testPassesThroughWhenNoHumDetected();
         testResetDisablesCancellation();
     }
@@ -559,6 +560,259 @@ private:
                 attenuationDb < -40.0
             );
         }
+    }
+
+    void testFixedModelLosesAlignmentUnderFrequencyDrift()
+    {
+        beginTest(
+            "Fixed model loses alignment under frequency drift"
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        constexpr int driftSamples =
+            240000;
+
+        constexpr int measurementSamples =
+            12000;
+
+        constexpr double startFrequencyHz =
+            60.0;
+
+        constexpr double endFrequencyHz =
+            60.2;
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            startFrequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        auto* analysisData =
+            analysisBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < analysisSamples;
+            ++sample
+        )
+        {
+            analysisData[sample] =
+                generator.processSample();
+        }
+
+        HumAnalyzer analyzer;
+
+        const auto model =
+            analyzer.analyze(
+                analysisBuffer,
+                0,
+                sampleRate
+            );
+
+        expect(
+            model.valid
+        );
+
+        expect(
+            model.humDetected
+        );
+
+        expectWithinAbsoluteError(
+            model.frequencyHz,
+            startFrequencyHz,
+            0.01
+        );
+
+        FixedHumCanceller canceller;
+
+        canceller.prepare(
+            sampleRate
+        );
+
+        canceller.activateModel(
+            model,
+            analysisSamples
+        );
+
+        expect(
+            canceller.isActive()
+        );
+
+        double earlyInputEnergy = 0.0;
+        double earlyOutputEnergy = 0.0;
+
+        double lateInputEnergy = 0.0;
+        double lateOutputEnergy = 0.0;
+
+        for (
+            int sample = 0;
+            sample < driftSamples;
+            ++sample
+        )
+        {
+            const auto progress =
+                static_cast<double>(sample)
+                / static_cast<double>(
+                    driftSamples - 1
+                );
+
+            const auto frequencyHz =
+                startFrequencyHz
+                + progress
+                * (
+                    endFrequencyHz
+                    - startFrequencyHz
+                );
+
+            generator.setFundamentalFrequency(
+                frequencyHz
+            );
+
+            const auto inputSample =
+                generator.processSample();
+
+            const auto outputSample =
+                canceller.processSample(
+                    inputSample
+                );
+
+            if (sample < measurementSamples)
+            {
+                earlyInputEnergy +=
+                    static_cast<double>(
+                        inputSample
+                    )
+                    * inputSample;
+
+                earlyOutputEnergy +=
+                    static_cast<double>(
+                        outputSample
+                    )
+                    * outputSample;
+            }
+
+            if (
+                sample
+                >= driftSamples
+                    - measurementSamples
+            )
+            {
+                lateInputEnergy +=
+                    static_cast<double>(
+                        inputSample
+                    )
+                    * inputSample;
+
+                lateOutputEnergy +=
+                    static_cast<double>(
+                        outputSample
+                    )
+                    * outputSample;
+            }
+        }
+
+        const auto calculateAttenuationDb =
+            [](
+                double inputEnergy,
+                double outputEnergy,
+                int numSamples
+            )
+            {
+                const auto rmsInput =
+                    std::sqrt(
+                        inputEnergy
+                        / static_cast<double>(
+                            numSamples
+                        )
+                    );
+
+                const auto rmsOutput =
+                    std::sqrt(
+                        outputEnergy
+                        / static_cast<double>(
+                            numSamples
+                        )
+                    );
+
+                return 20.0
+                    * std::log10(
+                        rmsOutput
+                        / rmsInput
+                    );
+            };
+
+        const auto earlyAttenuationDb =
+            calculateAttenuationDb(
+                earlyInputEnergy,
+                earlyOutputEnergy,
+                measurementSamples
+            );
+
+        const auto lateAttenuationDb =
+            calculateAttenuationDb(
+                lateInputEnergy,
+                lateOutputEnergy,
+                measurementSamples
+            );
+
+        expect(
+            earlyAttenuationDb < -35.0
+        );
+
+        expect(
+            lateAttenuationDb > -10.0
+        );
+
+        expect(
+            lateAttenuationDb
+            - earlyAttenuationDb
+            > 25.0
+        );
     }
 
     void testPassesThroughWhenNoHumDetected()
