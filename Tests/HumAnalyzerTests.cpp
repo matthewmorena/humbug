@@ -21,6 +21,7 @@ public:
     void runTest() override
     {
         testAnalyzesHumFromMixedSignal();
+        testTracksSlowFrequencyDrift();
         testReportsNoHumForUnrelatedSignal();
     }
 
@@ -185,6 +186,210 @@ private:
             result.harmonics[2].amplitude,
             0.08f,
             0.01f
+        );
+    }
+
+    void testTracksSlowFrequencyDrift()
+    {
+        beginTest(
+            "Analyzer tracks slow fundamental frequency drift"
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        constexpr int driftSamples =
+            240000;
+
+        constexpr int trackingWindows =
+            5;
+
+        constexpr int windowSpacingSamples =
+            (driftSamples - analysisSamples)
+            / (trackingWindows - 1);
+
+        constexpr double startFrequencyHz =
+            60.0;
+
+        constexpr double endFrequencyHz =
+            60.2;
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            startFrequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        juce::AudioBuffer<float> driftBuffer(
+            1,
+            driftSamples
+        );
+
+        auto* driftData =
+            driftBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < driftSamples;
+            ++sample
+        )
+        {
+            const auto progress =
+                static_cast<double>(sample)
+                / static_cast<double>(
+                    driftSamples - 1
+                );
+
+            const auto frequencyHz =
+                startFrequencyHz
+                + progress
+                * (
+                    endFrequencyHz
+                    - startFrequencyHz
+                );
+
+            generator.setFundamentalFrequency(
+                frequencyHz
+            );
+
+            driftData[sample] =
+                generator.processSample();
+        }
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        HumAnalyzer analyzer;
+
+        double firstEstimatedFrequencyHz =
+            0.0;
+
+        double lastEstimatedFrequencyHz =
+            0.0;
+
+        for (
+            int window = 0;
+            window < trackingWindows;
+            ++window
+        )
+        {
+            const auto windowStartSample =
+                window
+                * windowSpacingSamples;
+
+            analysisBuffer.copyFrom(
+                0,
+                0,
+                driftBuffer,
+                0,
+                windowStartSample,
+                analysisSamples
+            );
+
+            const auto result =
+                analyzer.analyze(
+                    analysisBuffer,
+                    0,
+                    sampleRate
+                );
+
+            expect(
+                result.valid
+            );
+
+            expect(
+                result.humDetected
+            );
+
+            const auto midpointSample =
+                static_cast<double>(
+                    windowStartSample
+                )
+                + 0.5
+                * static_cast<double>(
+                    analysisSamples - 1
+                );
+
+            const auto midpointProgress =
+                midpointSample
+                / static_cast<double>(
+                    driftSamples - 1
+                );
+
+            const auto expectedFrequencyHz =
+                startFrequencyHz
+                + midpointProgress
+                * (
+                    endFrequencyHz
+                    - startFrequencyHz
+                );
+
+            expectWithinAbsoluteError(
+                result.frequencyHz,
+                expectedFrequencyHz,
+                0.02
+            );
+
+            if (window == 0)
+            {
+                firstEstimatedFrequencyHz =
+                    result.frequencyHz;
+            }
+
+            if (
+                window
+                == trackingWindows - 1
+            )
+            {
+                lastEstimatedFrequencyHz =
+                    result.frequencyHz;
+            }
+        }
+
+        expect(
+            lastEstimatedFrequencyHz
+            - firstEstimatedFrequencyHz
+            > 0.15
         );
     }
 
