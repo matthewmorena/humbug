@@ -26,6 +26,7 @@ public:
         testFixedModelLosesAlignmentUnderFrequencyDrift();
         testPassesThroughWhenNoHumDetected();
         testResetDisablesCancellation();
+        testTrackedModelRemainsPhaseAlignedAfterDelayedActivation();
     }
 
 private:
@@ -1008,6 +1009,202 @@ private:
                 inputSample
             ),
             inputSample
+        );
+    }
+
+    void testTrackedModelRemainsPhaseAlignedAfterDelayedActivation()
+    {
+        beginTest(
+            "Tracked model remains phase aligned after delayed activation"
+        );
+
+        constexpr int analysisStartSample =
+            10000;
+
+        constexpr int analysisSamples =
+            12000;
+
+        constexpr int workerDelaySamples =
+            36000;
+
+        constexpr int measurementSamples =
+            12000;
+
+        constexpr double frequencyHz =
+            60.07;
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            frequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        // Advance the continuous source so the tracking
+        // window does not begin at absolute sample zero.
+        for (
+            int sample = 0;
+            sample < analysisStartSample;
+            ++sample
+        )
+        {
+            generator.processSample();
+        }
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        auto* analysisData =
+            analysisBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < analysisSamples;
+            ++sample
+        )
+        {
+            analysisData[sample] =
+                generator.processSample();
+        }
+
+        HumAnalyzer analyzer;
+
+        const auto model =
+            analyzer.analyze(
+                analysisBuffer,
+                0,
+                sampleRate
+            );
+
+        expect(model.valid);
+        expect(model.humDetected);
+
+        // Simulate time spent on background analysis.
+        for (
+            int sample = 0;
+            sample < workerDelaySamples;
+            ++sample
+        )
+        {
+            generator.processSample();
+        }
+
+        const auto activationSample =
+            analysisStartSample
+            + analysisSamples
+            + workerDelaySamples;
+
+        const auto sampleOffset =
+            activationSample
+            - analysisStartSample;
+
+        FixedHumCanceller canceller;
+
+        canceller.prepare(
+            sampleRate
+        );
+
+        canceller.activateModel(
+            model,
+            sampleOffset
+        );
+
+        expect(canceller.isActive());
+
+        double inputEnergy = 0.0;
+        double outputEnergy = 0.0;
+
+        for (
+            int sample = 0;
+            sample < measurementSamples;
+            ++sample
+        )
+        {
+            const auto inputSample =
+                generator.processSample();
+
+            const auto outputSample =
+                canceller.processSample(
+                    inputSample
+                );
+
+            inputEnergy +=
+                static_cast<double>(
+                    inputSample
+                )
+                * inputSample;
+
+            outputEnergy +=
+                static_cast<double>(
+                    outputSample
+                )
+                * outputSample;
+        }
+
+        const auto inputRms =
+            std::sqrt(
+                inputEnergy
+                / static_cast<double>(
+                    measurementSamples
+                )
+            );
+
+        const auto outputRms =
+            std::sqrt(
+                outputEnergy
+                / static_cast<double>(
+                    measurementSamples
+                )
+            );
+
+        const auto attenuationDb =
+            20.0
+            * std::log10(
+                outputRms
+                / inputRms
+            );
+
+        expect(
+            attenuationDb < -40.0
         );
     }
 };
