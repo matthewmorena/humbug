@@ -90,6 +90,7 @@ target_sources(HumbugTests
         Tests/HumTrackingWorkerTests.cpp
         Tests/LearnedHumModelMailboxTests.cpp
         Tests/HumAnalysisWorkerTests.cpp
+        Tests/AdaptiveHumCancellerTests.cpp
         Tests/RealTimeLearnIntegrationTests.cpp
 
         Source/PluginProcessor.cpp
