@@ -87,6 +87,7 @@ target_sources(HumbugTests
         Tests/HumAnalyzerTests.cpp
         Tests/LearnModeControllerTests.cpp
         Tests/HumTrackingControllerTests.cpp
+        Tests/HumTrackingWorkerTests.cpp
         Tests/LearnedHumModelMailboxTests.cpp
         Tests/HumAnalysisWorkerTests.cpp
         Tests/RealTimeLearnIntegrationTests.cpp

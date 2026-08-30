@@ -194,6 +194,18 @@ public:
             == State::ModelReady;
     }
 
+    void abortAnalysis() noexcept
+    {
+        jassert(
+            state.load()
+            == State::Analyzing
+        );
+
+        state.store(
+            State::Waiting
+        );
+    }
+
     const juce::AudioBuffer<float>&
     getAnalysisBuffer() const noexcept
     {
