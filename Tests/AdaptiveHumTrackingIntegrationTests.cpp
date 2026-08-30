@@ -29,6 +29,7 @@ public:
         testAdaptiveTrackingMaintainsCancellationDuringFrequencyDrift();
         testAdaptiveTrackingHandlesUnrelatedToneDuringFrequencyDrift();
         testAdaptiveTrackingHandlesHarmonicAmplitudeEvolution();
+        testAdaptiveTrackingHandlesHarmonicPhaseEvolution();
     }
 
 private:
@@ -1505,6 +1506,502 @@ private:
         expect(
             adaptiveAttenuationDb
                 < fixedAttenuationDb - 10.0
+        );
+    }
+
+    void testAdaptiveTrackingHandlesHarmonicPhaseEvolution()
+    {
+        beginTest(
+            "Adaptive tracking handles harmonic phase evolution"
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        constexpr int evolutionSamples =
+            240000;
+
+        constexpr int measurementSamples =
+            12000;
+
+        constexpr int hostBlockSize =
+            512;
+
+        constexpr int phaseChangeSample =
+            evolutionSamples / 2;
+
+        constexpr double frequencyHz =
+            60.0;
+
+        constexpr float h1Amplitude =
+            0.30f;
+
+        constexpr float h2Amplitude =
+            0.15f;
+
+        constexpr float h3Amplitude =
+            0.08f;
+
+        constexpr double startH1Phase =
+            0.18;
+
+        constexpr double startH2Phase =
+            0.25;
+
+        constexpr double startH3Phase =
+            0.41;
+
+        constexpr double endH1Phase =
+            0.43;
+
+        constexpr double endH2Phase =
+            0.05;
+
+        constexpr double endH3Phase =
+            0.66;
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            frequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            h1Amplitude
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            h2Amplitude
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            h3Amplitude
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            startH1Phase
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            startH2Phase
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            startH3Phase
+        );
+
+        generator.reset();
+
+        // ------------------------------------------------
+        // Initial fixed Learn
+        // ------------------------------------------------
+
+        juce::AudioBuffer<float> initialAnalysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        auto* initialAnalysisData =
+            initialAnalysisBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < analysisSamples;
+            ++sample
+        )
+        {
+            initialAnalysisData[sample] =
+                generator.processSample();
+        }
+
+        HumAnalyzer analyzer;
+
+        const auto initialModel =
+            analyzer.analyze(
+                initialAnalysisBuffer,
+                0,
+                sampleRate
+            );
+
+        expect(
+            initialModel.valid
+        );
+
+        expect(
+            initialModel.humDetected
+        );
+
+        expectWithinAbsoluteError(
+            initialModel.frequencyHz,
+            frequencyHz,
+            0.01
+        );
+
+        // ------------------------------------------------
+        // Tracking infrastructure
+        // ------------------------------------------------
+
+        HumTrackingController trackingController;
+
+        trackingController.prepare(
+            sampleRate,
+            1
+        );
+
+        // Advance the tracking controller through the
+        // initial Learn window so all components use
+        // the same absolute sample timeline.
+        trackingController.processBlock(
+            initialAnalysisBuffer
+        );
+
+        expect(
+            trackingController.getCurrentSamplePosition()
+                == static_cast<std::uint64_t>(
+                    analysisSamples
+                )
+        );
+
+        LearnedHumModelMailbox trackingMailbox;
+
+        HumTrackingWorker trackingWorker(
+            trackingController,
+            trackingMailbox
+        );
+
+        trackingWorker.prepare(
+            sampleRate,
+            0
+        );
+
+        expect(
+            trackingWorker.start()
+        );
+
+        expect(
+            trackingController.startTracking()
+        );
+
+        // ------------------------------------------------
+        // Fixed and adaptive cancellation begin from
+        // the same learned model and timeline.
+        // ------------------------------------------------
+
+        FixedHumCanceller fixedCanceller;
+
+        fixedCanceller.prepare(
+            sampleRate
+        );
+
+        fixedCanceller.activateModel(
+            initialModel,
+            analysisSamples
+        );
+
+        AdaptiveHumCanceller adaptiveCanceller;
+
+        adaptiveCanceller.prepare(
+            sampleRate
+        );
+
+        adaptiveCanceller.activateModel(
+            initialModel,
+            analysisSamples
+        );
+
+        expect(
+            fixedCanceller.isActive()
+        );
+
+        expect(
+            adaptiveCanceller.isActive()
+        );
+
+        double lateInputEnergy = 0.0;
+        double lateFixedOutputEnergy = 0.0;
+        double lateAdaptiveOutputEnergy = 0.0;
+
+        int evolutionPosition = 0;
+        int trackingUpdatesApplied = 0;
+        int postChangeUpdatesApplied = 0;
+
+        while (
+            evolutionPosition < evolutionSamples
+        )
+        {
+            // Consume completed tracking updates only
+            // at the beginning of a host block.
+            if (
+                trackingController.isModelReady()
+            )
+            {
+                PendingLearnResult result;
+
+                expect(
+                    trackingMailbox.tryConsume(
+                        result
+                    )
+                );
+
+                const auto activationSample =
+                    trackingController
+                        .getCurrentSamplePosition();
+
+                expect(
+                    activationSample
+                        >= result.analysisStartSample
+                );
+
+                const auto sampleOffset =
+                    activationSample
+                    - result.analysisStartSample;
+
+                const auto updateApplied =
+                    adaptiveCanceller.transitionToModel(
+                        result.model,
+                        static_cast<std::size_t>(
+                            sampleOffset
+                        )
+                    );
+
+                expect(
+                    updateApplied
+                );
+
+                if (updateApplied)
+                {
+                    ++trackingUpdatesApplied;
+
+                    const auto phaseChangeAbsoluteSample =
+                        static_cast<std::uint64_t>(
+                            analysisSamples
+                            + phaseChangeSample
+                        );
+
+                    if (
+                        result.analysisStartSample
+                        >= phaseChangeAbsoluteSample
+                    )
+                    {
+                        ++postChangeUpdatesApplied;
+                    }
+                }
+
+                trackingController
+                    .finishModelHandoff();
+            }
+
+            const auto samplesThisBlock =
+                std::min(
+                    hostBlockSize,
+                    evolutionSamples
+                        - evolutionPosition
+                );
+
+            juce::AudioBuffer<float> block(
+                1,
+                samplesThisBlock
+            );
+
+            auto* blockData =
+                block.getWritePointer(0);
+
+            // ------------------------------------------------
+            // Generate constant-frequency, constant-amplitude
+            // hum with one controlled phase-relationship
+            // change halfway through the test.
+            // ------------------------------------------------
+
+            for (
+                int sample = 0;
+                sample < samplesThisBlock;
+                ++sample
+            )
+            {
+                const auto absoluteEvolutionSample =
+                    evolutionPosition
+                    + sample;
+
+                if (
+                    absoluteEvolutionSample
+                    == phaseChangeSample
+                )
+                {
+                    generator.setHarmonicPhase(
+                        1,
+                        endH1Phase
+                    );
+
+                    generator.setHarmonicPhase(
+                        2,
+                        endH2Phase
+                    );
+
+                    generator.setHarmonicPhase(
+                        3,
+                        endH3Phase
+                    );
+                }
+
+                blockData[sample] =
+                    generator.processSample();
+            }
+
+            // Tracking always sees the RAW input.
+            trackingController.processBlock(
+                block
+            );
+
+            // ------------------------------------------------
+            // Compare fixed and adaptive cancellation.
+            // ------------------------------------------------
+
+            for (
+                int sample = 0;
+                sample < samplesThisBlock;
+                ++sample
+            )
+            {
+                const auto inputSample =
+                    blockData[sample];
+
+                const auto fixedOutput =
+                    fixedCanceller.processSample(
+                        inputSample
+                    );
+
+                const auto adaptiveOutput =
+                    adaptiveCanceller.processSample(
+                        inputSample
+                    );
+
+                const auto absoluteEvolutionSample =
+                    evolutionPosition
+                    + sample;
+
+                if (
+                    absoluteEvolutionSample
+                    >= evolutionSamples
+                        - measurementSamples
+                )
+                {
+                    lateInputEnergy +=
+                        static_cast<double>(
+                            inputSample
+                        )
+                        * inputSample;
+
+                    lateFixedOutputEnergy +=
+                        static_cast<double>(
+                            fixedOutput
+                        )
+                        * fixedOutput;
+
+                    lateAdaptiveOutputEnergy +=
+                        static_cast<double>(
+                            adaptiveOutput
+                        )
+                        * adaptiveOutput;
+                }
+            }
+
+            evolutionPosition +=
+                samplesThisBlock;
+
+            // The test simulates audio much faster than
+            // the background worker executes in wall-clock
+            // time, so allow completed captures to finish
+            // analysis before advancing simulated audio.
+            if (
+                trackingController.isReadyForAnalysis()
+                || trackingController.isAnalyzing()
+            )
+            {
+                constexpr double timeoutMs =
+                    5000.0;
+
+                const auto startTime =
+                    juce::Time::
+                        getMillisecondCounterHiRes();
+
+                while (
+                    !trackingController.isModelReady()
+                    && (
+                        juce::Time::
+                            getMillisecondCounterHiRes()
+                        - startTime
+                    ) < timeoutMs
+                )
+                {
+                    juce::Thread::sleep(
+                        1
+                    );
+                }
+
+                expect(
+                    trackingController.isModelReady()
+                );
+            }
+        }
+
+        trackingWorker.stop();
+
+        const auto calculateAttenuationDb =
+            [](
+                double inputEnergy,
+                double outputEnergy
+            )
+            {
+                return 10.0
+                    * std::log10(
+                        outputEnergy
+                        / inputEnergy
+                    );
+            };
+
+        const auto fixedAttenuationDb =
+            calculateAttenuationDb(
+                lateInputEnergy,
+                lateFixedOutputEnergy
+            );
+
+        const auto adaptiveAttenuationDb =
+            calculateAttenuationDb(
+                lateInputEnergy,
+                lateAdaptiveOutputEnergy
+            );
+
+        expect(
+            trackingUpdatesApplied >= 3
+        );
+
+        expect(
+            postChangeUpdatesApplied >= 1
+        );
+
+        expect(
+            fixedAttenuationDb > -5.0
+        );
+
+        expect(
+            adaptiveAttenuationDb < -30.0
+        );
+
+        expect(
+            adaptiveAttenuationDb
+                < fixedAttenuationDb - 20.0
         );
     }
 };
