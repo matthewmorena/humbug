@@ -92,6 +92,7 @@ target_sources(HumbugTests
         Tests/HumAnalysisWorkerTests.cpp
         Tests/AdaptiveHumCancellerTests.cpp
         Tests/RealTimeLearnIntegrationTests.cpp
+        Tests/AdaptiveHumTrackingIntegrationTests.cpp
 
         Source/PluginProcessor.cpp
         Source/PluginProcessor.h
