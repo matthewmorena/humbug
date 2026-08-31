@@ -99,11 +99,17 @@ private:
             const auto analysisStartSample =
                 controller.getAnalysisStartSample();
 
+            const auto referenceFrequencyHz =
+                controller
+                    .getAnalysisReferenceFrequency();
+
             const auto model =
-                analyzer.analyze(
+                analyzer.analyzeNear(
                     controller.getAnalysisBuffer(),
                     analysisChannel,
-                    sampleRate
+                    sampleRate,
+                    referenceFrequencyHz,
+                    trackingSearchRadiusHz
                 );
 
             if (threadShouldExit())
@@ -149,4 +155,7 @@ private:
     double sampleRate = 0.0;
 
     int analysisChannel = 0;
+
+    static constexpr double trackingSearchRadiusHz =
+        0.3;
 };

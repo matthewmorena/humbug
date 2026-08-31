@@ -47,16 +47,51 @@ public:
         analysisStartSample = 0;
         nextCaptureSample = 0;
 
+        nextReferenceFrequencyHz =
+            0.0;
+
+        analysisReferenceFrequencyHz =
+            0.0;
+
         state.store(
             State::Inactive
         );
+
+        stopRequested.store(
+            false,
+            std::memory_order_release
+        );
+    }
+
+    bool setReferenceFrequency(
+        double newReferenceFrequencyHz
+    ) noexcept
+    {
+        if (
+            !std::isfinite(
+                newReferenceFrequencyHz
+            )
+            || newReferenceFrequencyHz <= 0.0
+        )
+        {
+            return false;
+        }
+
+        nextReferenceFrequencyHz =
+            newReferenceFrequencyHz;
+
+        return true;
     }
 
     bool startTracking() noexcept
     {
         if (
             state.load()
-            != State::Inactive
+                != State::Inactive
+            || !std::isfinite(
+                nextReferenceFrequencyHz
+            )
+            || nextReferenceFrequencyHz <= 0.0
         )
         {
             return false;
@@ -68,6 +103,11 @@ public:
 
         state.store(
             State::Waiting
+        );
+
+        stopRequested.store(
+            false,
+            std::memory_order_release
         );
 
         return true;
@@ -89,6 +129,9 @@ public:
             {
                 analysisStartSample =
                     processedSamples;
+
+                analysisReferenceFrequencyHz =
+                    nextReferenceFrequencyHz;
 
                 nextCaptureSample =
                     analysisStartSample
@@ -123,10 +166,21 @@ public:
             );
     }
 
+    double getAnalysisReferenceFrequency() const noexcept
+    {
+        jassert(
+            state.load()
+                == State::Analyzing
+        );
+
+        return analysisReferenceFrequencyHz;
+    }
+
     bool isInactive() const noexcept
     {
-        return state.load()
-            == State::Inactive;
+        return state.load(
+            std::memory_order_acquire
+        ) == State::Inactive;
     }
 
     bool isWaiting() const noexcept
@@ -183,9 +237,49 @@ public:
             == State::ModelReady
         );
 
+        if (
+            stopRequested.exchange(
+                false,
+                std::memory_order_acq_rel
+            )
+        )
+        {
+            state.store(
+                State::Inactive,
+                std::memory_order_release
+            );
+
+            return;
+        }
+
         state.store(
-            State::Waiting
+            State::Waiting,
+            std::memory_order_release
         );
+    }
+
+    void requestStopTracking() noexcept
+    {
+        stopRequested.store(
+            true,
+            std::memory_order_release
+        );
+
+        auto expected =
+            State::Waiting;
+
+        if (
+            state.compare_exchange_strong(
+                expected,
+                State::Inactive
+            )
+        )
+        {
+            stopRequested.store(
+                false,
+                std::memory_order_release
+            );
+        }
     }
 
     bool isModelReady() const noexcept
@@ -201,8 +295,24 @@ public:
             == State::Analyzing
         );
 
+        if (
+            stopRequested.exchange(
+                false,
+                std::memory_order_acq_rel
+            )
+        )
+        {
+            state.store(
+                State::Inactive,
+                std::memory_order_release
+            );
+
+            return;
+        }
+
         state.store(
-            State::Waiting
+            State::Waiting,
+            std::memory_order_release
         );
     }
 
@@ -236,9 +346,19 @@ private:
         State::Inactive
     };
 
+    std::atomic<bool> stopRequested {
+        false
+    };
+
     std::uint64_t processedSamples = 0;
     std::uint64_t analysisStartSample = 0;
 
     std::uint64_t trackingIntervalSamples = 0;
     std::uint64_t nextCaptureSample = 0;
+
+    double nextReferenceFrequencyHz =
+        0.0;
+
+    double analysisReferenceFrequencyHz =
+        0.0;
 };

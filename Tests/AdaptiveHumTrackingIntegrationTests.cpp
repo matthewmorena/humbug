@@ -194,6 +194,12 @@ private:
         );
 
         expect(
+            trackingController.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
             trackingController.startTracking()
         );
 
@@ -679,6 +685,12 @@ private:
 
         expect(
             trackingWorker.start()
+        );
+
+        expect(
+            trackingController.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(
@@ -1178,6 +1190,12 @@ private:
 
         expect(
             trackingWorker.start()
+        );
+
+        expect(
+            trackingController.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(
@@ -1689,6 +1707,12 @@ private:
 
         expect(
             trackingWorker.start()
+        );
+
+        expect(
+            trackingController.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(
@@ -2230,6 +2254,12 @@ private:
 
         expect(
             trackingWorker.start()
+        );
+
+        expect(
+            trackingController.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(

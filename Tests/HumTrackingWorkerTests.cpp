@@ -59,6 +59,12 @@ private:
         );
 
         expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
             controller.startTracking()
         );
 
@@ -264,6 +270,12 @@ private:
 
         expect(
             worker.start()
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(

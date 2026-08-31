@@ -1,6 +1,10 @@
 #include <JuceHeader.h>
 
 #include "../Source/PluginProcessor.h"
+#include "../Source/DSP/HumGenerator.h"
+
+#include <algorithm>
+#include <cmath>
 
 class ProcessorIntegrationTests final
     : public juce::UnitTest
@@ -20,6 +24,7 @@ public:
         testSyntheticHumMatchesAcrossStereoChannels();
         testRealtimeLearnCancelsSyntheticHum();
         testRealtimeRelearnDisablesCancellation();
+        testProcessorAdaptiveTrackingMaintainsCancellationDuringFrequencyDrift();
     }
 
 private:
@@ -625,6 +630,350 @@ private:
         );
 
         processor.releaseResources();
+    }
+
+    void testProcessorAdaptiveTrackingMaintainsCancellationDuringFrequencyDrift()
+    {
+        beginTest(
+            "Processor adaptive tracking maintains cancellation during frequency drift"
+        );
+
+        constexpr int hostBlockSize =
+            512;
+
+        constexpr int driftSamples =
+            240000;
+
+        constexpr int measurementSamples =
+            12000;
+
+        constexpr double startFrequencyHz =
+            60.0;
+
+        constexpr double endFrequencyHz =
+            60.2;
+
+        HumbugAudioProcessor processor;
+
+        // Configure the production processor for the
+        // current mono-only Learn/tracking path.
+        processor.setPlayConfigDetails(
+            1,
+            1,
+            sampleRate,
+            hostBlockSize
+        );
+
+        processor.prepareToPlay(
+            sampleRate,
+            hostBlockSize
+        );
+
+        processor.setSyntheticHumEnabled(
+            false
+        );
+
+        expectEquals(
+            processor.getTotalNumInputChannels(),
+            1
+        );
+
+        expect(
+            processor.isLearnAvailable()
+        );
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            startFrequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        juce::MidiBuffer midiBuffer;
+
+        juce::AudioBuffer<float> learnBlock(
+            1,
+            hostBlockSize
+        );
+
+        const auto generateStationaryBlock =
+            [&]()
+            {
+                auto* samples =
+                    learnBlock.getWritePointer(0);
+
+                for (
+                    int sample = 0;
+                    sample < hostBlockSize;
+                    ++sample
+                )
+                {
+                    samples[sample] =
+                        generator.processSample();
+                }
+            };
+
+        // ------------------------------------------------
+        // Initial manual Learn through the actual
+        // PluginProcessor path.
+        // ------------------------------------------------
+
+        processor.requestLearn();
+
+        expect(
+            processor.isLearnInProgress()
+        );
+
+        constexpr double learnTimeoutMs =
+            5000.0;
+
+        const auto learnStartTime =
+            juce::Time::
+                getMillisecondCounterHiRes();
+
+        while (
+            processor.isLearnInProgress()
+            && (
+                juce::Time::
+                    getMillisecondCounterHiRes()
+                - learnStartTime
+            ) < learnTimeoutMs
+        )
+        {
+            generateStationaryBlock();
+
+            processor.processBlock(
+                learnBlock,
+                midiBuffer
+            );
+
+            // Give the background Learn worker CPU time
+            // while audio continues advancing.
+            juce::Thread::sleep(
+                1
+            );
+        }
+
+        expect(
+            !processor.isLearnInProgress()
+        );
+
+        if (
+            processor.isLearnInProgress()
+        )
+        {
+            processor.releaseResources();
+            return;
+        }
+
+        // At this point the processor has consumed the
+        // valid manual model and should have automatically
+        // enabled adaptive tracking.
+
+        // ------------------------------------------------
+        // Drift the same continuous physical source from
+        // 60.0 Hz to 60.2 Hz over five seconds.
+        // ------------------------------------------------
+
+        double lateInputEnergy =
+            0.0;
+
+        double lateOutputEnergy =
+            0.0;
+
+        int driftPosition =
+            0;
+
+        while (
+            driftPosition < driftSamples
+        )
+        {
+            const auto samplesThisBlock =
+                std::min(
+                    hostBlockSize,
+                    driftSamples
+                        - driftPosition
+                );
+
+            juce::AudioBuffer<float> block(
+                1,
+                samplesThisBlock
+            );
+
+            auto* samples =
+                block.getWritePointer(0);
+
+            for (
+                int sample = 0;
+                sample < samplesThisBlock;
+                ++sample
+            )
+            {
+                const auto absoluteDriftSample =
+                    driftPosition
+                    + sample;
+
+                const auto progress =
+                    static_cast<double>(
+                        absoluteDriftSample
+                    )
+                    / static_cast<double>(
+                        driftSamples - 1
+                    );
+
+                const auto frequencyHz =
+                    startFrequencyHz
+                    + progress
+                    * (
+                        endFrequencyHz
+                        - startFrequencyHz
+                    );
+
+                // HumGenerator changes oscillator frequency
+                // without resetting phase, so this remains
+                // one continuous drifting source.
+                generator.setFundamentalFrequency(
+                    frequencyHz
+                );
+
+                const auto inputSample =
+                    generator.processSample();
+
+                samples[sample] =
+                    inputSample;
+
+                if (
+                    absoluteDriftSample
+                    >= driftSamples
+                        - measurementSamples
+                )
+                {
+                    lateInputEnergy +=
+                        static_cast<double>(
+                            inputSample
+                        )
+                        * inputSample;
+                }
+            }
+
+            processor.processBlock(
+                block,
+                midiBuffer
+            );
+
+            const auto* outputSamples =
+                block.getReadPointer(0);
+
+            for (
+                int sample = 0;
+                sample < samplesThisBlock;
+                ++sample
+            )
+            {
+                const auto absoluteDriftSample =
+                    driftPosition
+                    + sample;
+
+                if (
+                    absoluteDriftSample
+                    >= driftSamples
+                        - measurementSamples
+                )
+                {
+                    const auto outputSample =
+                        outputSamples[sample];
+
+                    lateOutputEnergy +=
+                        static_cast<double>(
+                            outputSample
+                        )
+                        * outputSample;
+                }
+            }
+
+            driftPosition +=
+                samplesThisBlock;
+
+            // For this first processor-level regression,
+            // run the simulated audio approximately in
+            // realtime so the tracking worker gets a
+            // realistic opportunity to complete analyses.
+            //
+            // 512 samples / 48 kHz ≈ 10.67 ms.
+            juce::Thread::sleep(
+                10
+            );
+        }
+
+        processor.releaseResources();
+
+        expect(
+            lateInputEnergy > 0.0
+        );
+
+        expect(
+            lateOutputEnergy >= 0.0
+        );
+
+        if (
+            lateInputEnergy <= 0.0
+        )
+        {
+            return;
+        }
+
+        const auto attenuationDb =
+            10.0
+            * std::log10(
+                lateOutputEnergy
+                / lateInputEnergy
+            );
+
+        // Broad first-run requirement:
+        // the adaptive production path should at least
+        // provide useful late cancellation. The equivalent
+        // stale fixed-model fixture previously ended around
+        // +5 dB.
+        expect(
+            attenuationDb < -15.0
+        );
     }
 };
 

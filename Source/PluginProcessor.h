@@ -3,12 +3,15 @@
 #include <JuceHeader.h>
 
 #include <atomic>
+#include <cstdint>
 
 #include "DSP/HumGenerator.h"
-#include "DSP/FixedHumCanceller.h"
+#include "DSP/AdaptiveHumCanceller.h"
 #include "DSP/HumAnalysisWorker.h"
 #include "DSP/LearnedHumModelMailbox.h"
 #include "DSP/LearnModeController.h"
+#include "DSP/HumTrackingController.h"
+#include "DSP/HumTrackingWorker.h"
 
 namespace ParameterIDs
 {
@@ -125,7 +128,13 @@ LearnedHumModelMailbox learnedModelMailbox;
 
 HumAnalysisWorker humAnalysisWorker;
 
-FixedHumCanceller fixedHumCanceller;
+HumTrackingController humTrackingController;
+
+LearnedHumModelMailbox trackingModelMailbox;
+
+HumTrackingWorker humTrackingWorker;
+
+AdaptiveHumCanceller adaptiveHumCanceller;
 
 juce::dsp::Gain<float> gainProcessor;
 
@@ -136,6 +145,12 @@ std::atomic<bool> learnRequested {
 std::atomic<bool> syntheticHumEnabled {
     false
 };
+
+bool adaptiveTrackingWanted =
+    false;
+
+std::uint64_t minimumTrackingAnalysisStartSample =
+    0;
 
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
 

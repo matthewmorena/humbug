@@ -22,6 +22,11 @@ public:
         testCompletesCaptureAcrossHostBlocks();
         testResumesPeriodicCaptureAfterModelHandoff();
         testDoesNotCaptureWhilePreviousUpdateIsOutstanding();
+
+        testStopsImmediatelyWhileWaiting();
+        testStopsAfterOutstandingOperationCompletes();
+        testStopRequestIsHonoredWhenAnalysisAborts();
+        testSnapshotsReferenceFrequencyForEachCapture();
     }
 
 private:
@@ -46,6 +51,12 @@ private:
 
         expect(
             controller.isInactive()
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(
@@ -145,6 +156,12 @@ private:
         controller.prepare(
             sampleRate,
             numChannels
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
         );
 
         expect(
@@ -351,6 +368,12 @@ private:
         );
 
         expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
             controller.startTracking()
         );
 
@@ -536,6 +559,12 @@ private:
         );
 
         expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
             controller.startTracking()
         );
 
@@ -711,6 +740,506 @@ private:
             controller.getAnalysisStartSample()
                 != originalAnalysisStartSample
         );
+    }
+
+    void testStopsImmediatelyWhileWaiting()
+    {
+        beginTest(
+            "Stops immediately while waiting"
+        );
+
+        HumTrackingController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        expect(
+            controller.isInactive()
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
+            controller.startTracking()
+        );
+
+        expect(
+            controller.isWaiting()
+        );
+
+        controller.requestStopTracking();
+
+        expect(
+            controller.isInactive()
+        );
+
+        constexpr int hostBlockSize =
+            512;
+
+        juce::AudioBuffer<float> block(
+            numChannels,
+            hostBlockSize
+        );
+
+        block.clear();
+
+        // Process well beyond the one-second tracking
+        // interval. No capture should begin because
+        // tracking is inactive.
+        for (
+            int blockIndex = 0;
+            blockIndex < 100;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isInactive()
+        );
+
+        expect(
+            !controller.isCollecting()
+        );
+
+        expect(
+            !controller.isReadyForAnalysis()
+        );
+    }
+
+    void testStopsAfterOutstandingOperationCompletes()
+    {
+        beginTest(
+            "Stops after outstanding tracking operation completes"
+        );
+
+        HumTrackingController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
+            controller.startTracking()
+        );
+
+        constexpr int hostBlockSize =
+            512;
+
+        juce::AudioBuffer<float> block(
+            numChannels,
+            hostBlockSize
+        );
+
+        block.clear();
+
+        // Advance to absolute sample 48128.
+        //
+        // The first tracking capture will begin on
+        // the next block.
+        for (
+            int blockIndex = 0;
+            blockIndex < 94;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isWaiting()
+        );
+
+        expect(
+            controller.getCurrentSamplePosition()
+                == static_cast<std::uint64_t>(
+                    48128
+                )
+        );
+
+        // Begin the tracking capture.
+        controller.processBlock(
+            block
+        );
+
+        expect(
+            controller.isCollecting()
+        );
+
+        expect(
+            controller.getAnalysisStartSample()
+                == static_cast<std::uint64_t>(
+                    48128
+                )
+        );
+
+        // The first block supplied 512 samples.
+        // Another 23 blocks complete the 12000-sample
+        // tracking window.
+        for (
+            int blockIndex = 0;
+            blockIndex < 23;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        const auto originalAnalysisStartSample =
+            controller.getAnalysisStartSample();
+
+        // Request the stop while the worker conceptually
+        // owns the frozen analysis buffer.
+        controller.requestStopTracking();
+
+        // Tracking must not stop immediately because an
+        // operation is still outstanding.
+        expect(
+            controller.isAnalyzing()
+        );
+
+        expect(
+            !controller.isInactive()
+        );
+
+        // The analysis completes normally.
+        controller.finishAnalysis();
+
+        expect(
+            controller.isModelReady()
+        );
+
+        expect(
+            !controller.isInactive()
+        );
+
+        // Simulate the audio thread consuming the result.
+        // Because a stop was requested, handoff should now
+        // transition to Inactive rather than Waiting.
+        controller.finishModelHandoff();
+
+        expect(
+            controller.isInactive()
+        );
+
+        expect(
+            !controller.isWaiting()
+        );
+
+        expect(
+            controller.getAnalysisStartSample()
+                == originalAnalysisStartSample
+        );
+
+        // Process well beyond another tracking interval.
+        // No new capture should occur.
+        for (
+            int blockIndex = 0;
+            blockIndex < 100;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isInactive()
+        );
+
+        expect(
+            !controller.isCollecting()
+        );
+
+        expect(
+            !controller.isReadyForAnalysis()
+        );
+    }
+
+    void testStopRequestIsHonoredWhenAnalysisAborts()
+    {
+        beginTest(
+            "Stop request is honored when analysis aborts"
+        );
+
+        HumTrackingController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
+            controller.startTracking()
+        );
+
+        constexpr int hostBlockSize =
+            512;
+
+        juce::AudioBuffer<float> block(
+            numChannels,
+            hostBlockSize
+        );
+
+        block.clear();
+
+        for (
+            int blockIndex = 0;
+            blockIndex < 94;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        // Capture 12000 samples.
+        for (
+            int blockIndex = 0;
+            blockIndex < 24;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        controller.requestStopTracking();
+
+        expect(
+            controller.isAnalyzing()
+        );
+
+        controller.abortAnalysis();
+
+        expect(
+            controller.isInactive()
+        );
+
+        // Confirm the aborted operation cannot cause a
+        // later automatic capture.
+        for (
+            int blockIndex = 0;
+            blockIndex < 100;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isInactive()
+        );
+    }
+
+    void testSnapshotsReferenceFrequencyForEachCapture()
+    {
+        beginTest(
+            "Snapshots reference frequency for each tracking capture"
+        );
+
+        HumTrackingController controller;
+
+        controller.prepare(
+            sampleRate,
+            numChannels
+        );
+
+        expect(
+            controller.setReferenceFrequency(
+                60.0
+            )
+        );
+
+        expect(
+            controller.startTracking()
+        );
+
+        constexpr int hostBlockSize =
+            512;
+
+        juce::AudioBuffer<float> block(
+            numChannels,
+            hostBlockSize
+        );
+
+        block.clear();
+
+        // Advance to the first eligible capture.
+        for (
+            int blockIndex = 0;
+            blockIndex < 94;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        // First capture begins with 60.0 Hz as
+        // its tracking reference.
+        controller.processBlock(
+            block
+        );
+
+        expect(
+            controller.isCollecting()
+        );
+
+        // Complete the first tracking window.
+        for (
+            int blockIndex = 0;
+            blockIndex < 23;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        // Change the reference AFTER this capture
+        // completed but BEFORE the worker claims it.
+        expect(
+            controller.setReferenceFrequency(
+                60.15
+            )
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        expectWithinAbsoluteError(
+            controller
+                .getAnalysisReferenceFrequency(),
+            60.0,
+            1.0e-12
+        );
+
+        controller.finishAnalysis();
+        controller.finishModelHandoff();
+
+        // Current position is 60416.
+        // Advance toward the next nominal target.
+        for (
+            int blockIndex = 0;
+            blockIndex < 69;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        controller.processBlock(
+            block
+        );
+
+        expect(
+            controller.isWaiting()
+        );
+
+        // Next block begins the second capture.
+        controller.processBlock(
+            block
+        );
+
+        expect(
+            controller.isCollecting()
+        );
+
+        for (
+            int blockIndex = 0;
+            blockIndex < 23;
+            ++blockIndex
+        )
+        {
+            controller.processBlock(
+                block
+            );
+        }
+
+        expect(
+            controller.isReadyForAnalysis()
+        );
+
+        expect(
+            controller.tryBeginAnalysis()
+        );
+
+        // The second window must use the newer
+        // reference frequency.
+        expectWithinAbsoluteError(
+            controller
+                .getAnalysisReferenceFrequency(),
+            60.15,
+            1.0e-12
+        );
+
+        controller.finishAnalysis();
+        controller.finishModelHandoff();
     }
 };
 
