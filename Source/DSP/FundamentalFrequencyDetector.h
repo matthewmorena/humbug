@@ -81,6 +81,54 @@ public:
         );
     }
 
+    Result detectNear(
+        const juce::AudioBuffer<float>& buffer,
+        int channel,
+        double sampleRate,
+        double referenceFrequencyHz,
+        double searchRadiusHz
+    ) const noexcept
+    {
+        if (
+            !std::isfinite(referenceFrequencyHz)
+            || !std::isfinite(searchRadiusHz)
+            || referenceFrequencyHz <= 0.0
+            || searchRadiusHz <= 0.0
+        )
+        {
+            return {};
+        }
+
+        const auto minimumFrequencyHz =
+            referenceFrequencyHz
+            - searchRadiusHz;
+
+        const auto maximumFrequencyHz =
+            referenceFrequencyHz
+            + searchRadiusHz;
+
+        const auto result =
+            searchRange(
+                buffer,
+                channel,
+                sampleRate,
+                minimumFrequencyHz,
+                maximumFrequencyHz
+            );
+
+        if (!result.valid)
+        {
+            return result;
+        }
+
+        return classifyResult(
+            buffer,
+            channel,
+            sampleRate,
+            result
+        );
+    }
+
 private:
     static constexpr double searchStepHz =
         0.1;
@@ -114,6 +162,9 @@ private:
                 )
             );
 
+        int bestStep =
+            -1;
+
         for (
             int step = 0;
             step <= numberOfSteps;
@@ -145,19 +196,33 @@ private:
                 bestResult.residualEnergy =
                     fit.residualEnergy;
 
-                bestResult.valid = true;
+                bestResult.valid =
+                    true;
+
+                bestStep =
+                    step;
             }
         }
 
         if (!bestResult.valid)
+        {
             return bestResult;
+        }
+
+        // Parabolic refinement requires one coarse
+        // candidate on either side of the minimum.
+        if (
+            bestStep <= 0
+            || bestStep >= numberOfSteps
+        )
+        {
+            return bestResult;
+        }
 
         return refineResult(
             buffer,
             channel,
             sampleRate,
-            minimumFrequencyHz,
-            maximumFrequencyHz,
             bestResult
         );
     }
@@ -166,21 +231,9 @@ private:
         const juce::AudioBuffer<float>& buffer,
         int channel,
         double sampleRate,
-        double minimumFrequencyHz,
-        double maximumFrequencyHz,
         const Result& coarseResult
     ) const noexcept
     {
-        if (
-            coarseResult.frequencyHz - searchStepHz
-                < minimumFrequencyHz
-            || coarseResult.frequencyHz + searchStepHz
-                > maximumFrequencyHz
-        )
-        {
-            return coarseResult;
-        }
-
         HumEstimator estimator;
 
         const auto leftFit =
@@ -201,8 +254,13 @@ private:
                     + searchStepHz
             );
 
-        if (!leftFit.valid || !rightFit.valid)
+        if (
+            !leftFit.valid
+            || !rightFit.valid
+        )
+        {
             return coarseResult;
+        }
 
         const auto leftResidual =
             leftFit.residualEnergy;
@@ -219,19 +277,27 @@ private:
             + rightResidual;
 
         if (denominator <= 0.0)
+        {
             return coarseResult;
+        }
 
         const auto offsetInSteps =
             0.5
             * (leftResidual - rightResidual)
             / denominator;
 
-        if (std::abs(offsetInSteps) > 0.5)
+        if (
+            std::abs(offsetInSteps)
+            > 0.5
+        )
+        {
             return coarseResult;
+        }
 
         const auto refinedFrequency =
             coarseResult.frequencyHz
-            + offsetInSteps * searchStepHz;
+            + offsetInSteps
+                * searchStepHz;
 
         const auto refinedFit =
             estimator.fit(
@@ -258,7 +324,8 @@ private:
         refinedResult.residualEnergy =
             refinedFit.residualEnergy;
 
-        refinedResult.valid = true;
+        refinedResult.valid =
+            true;
 
         return refinedResult;
     }

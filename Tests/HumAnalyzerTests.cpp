@@ -23,6 +23,8 @@ public:
         testAnalyzesHumFromMixedSignal();
         testTracksSlowFrequencyDrift();
         testReportsNoHumForUnrelatedSignal();
+
+        testAnalyzesHumNearReferenceFrequency();
     }
 
 private:
@@ -465,6 +467,161 @@ private:
                 0.000001f
             );
         }
+    }
+
+    void testAnalyzesHumNearReferenceFrequency()
+    {
+        beginTest(
+            "Analyzer learns hum model near reference frequency"
+        );
+
+        constexpr int analysisSamples =
+            12000;
+
+        constexpr double actualFrequencyHz =
+            60.18;
+
+        constexpr double referenceFrequencyHz =
+            60.0;
+
+        constexpr double searchRadiusHz =
+            0.3;
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            actualFrequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.15f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.08f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        juce::AudioBuffer<float> analysisBuffer(
+            1,
+            analysisSamples
+        );
+
+        analysisBuffer.clear();
+
+        generator.addToBuffer(
+            analysisBuffer
+        );
+
+        // Include the same kind of unrelated material
+        // tracking may encounter in production.
+        constexpr double desiredFrequencyHz =
+            997.0;
+
+        constexpr float desiredAmplitude =
+            0.10f;
+
+        auto* samples =
+            analysisBuffer.getWritePointer(0);
+
+        for (
+            int sample = 0;
+            sample < analysisSamples;
+            ++sample
+        )
+        {
+            const auto time =
+                static_cast<double>(sample)
+                / sampleRate;
+
+            samples[sample] +=
+                desiredAmplitude
+                * static_cast<float>(
+                    std::sin(
+                        juce::MathConstants<double>::twoPi
+                        * desiredFrequencyHz
+                        * time
+                    )
+                );
+        }
+
+        HumAnalyzer analyzer;
+
+        const auto result =
+            analyzer.analyzeNear(
+                analysisBuffer,
+                0,
+                sampleRate,
+                referenceFrequencyHz,
+                searchRadiusHz
+            );
+
+        expect(
+            result.valid
+        );
+
+        expect(
+            result.humDetected
+        );
+
+        expectWithinAbsoluteError(
+            result.frequencyHz,
+            actualFrequencyHz,
+            0.01
+        );
+
+        expectWithinAbsoluteError(
+            result.harmonics[0].frequencyHz,
+            actualFrequencyHz,
+            0.01
+        );
+
+        expectWithinAbsoluteError(
+            result.harmonics[0].amplitude,
+            0.30f,
+            0.01f
+        );
+
+        expectWithinAbsoluteError(
+            result.harmonics[1].amplitude,
+            0.15f,
+            0.01f
+        );
+
+        expectWithinAbsoluteError(
+            result.harmonics[2].amplitude,
+            0.08f,
+            0.01f
+        );
     }
 };
 

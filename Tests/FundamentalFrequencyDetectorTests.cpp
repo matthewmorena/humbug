@@ -30,6 +30,8 @@ public:
         testRejectsUnrelatedTone();
         testRejectsSingleHumHarmonic();
         testDetectsTwoHarmonicHum();
+
+        testDetectsNearReferenceFrequency();
     }
 
 private:
@@ -844,6 +846,102 @@ private:
         expectWithinAbsoluteError(
             result.frequencyHz,
             59.73,
+            0.01
+        );
+    }
+
+    void testDetectsNearReferenceFrequency()
+    {
+        beginTest(
+            "Detector identifies hum near reference frequency"
+        );
+
+        constexpr double actualFrequencyHz =
+            60.18;
+
+        constexpr double referenceFrequencyHz =
+            60.0;
+
+        constexpr double searchRadiusHz =
+            0.3;
+
+        HumGenerator generator;
+
+        generator.setFundamentalFrequency(
+            actualFrequencyHz
+        );
+
+        generator.prepare(
+            sampleRate
+        );
+
+        generator.clearHarmonics();
+
+        generator.setHarmonicAmplitude(
+            1,
+            0.30f
+        );
+
+        generator.setHarmonicAmplitude(
+            2,
+            0.12f
+        );
+
+        generator.setHarmonicAmplitude(
+            3,
+            0.05f
+        );
+
+        generator.setHarmonicPhase(
+            1,
+            0.18
+        );
+
+        generator.setHarmonicPhase(
+            2,
+            0.25
+        );
+
+        generator.setHarmonicPhase(
+            3,
+            0.41
+        );
+
+        generator.reset();
+
+        juce::AudioBuffer<float> buffer(
+            1,
+            12000
+        );
+
+        buffer.clear();
+
+        generator.addToBuffer(
+            buffer
+        );
+
+        FundamentalFrequencyDetector detector;
+
+        const auto result =
+            detector.detectNear(
+                buffer,
+                0,
+                sampleRate,
+                referenceFrequencyHz,
+                searchRadiusHz
+            );
+
+        expect(
+            result.valid
+        );
+
+        expect(
+            result.humDetected
+        );
+
+        expectWithinAbsoluteError(
+            result.frequencyHz,
+            actualFrequencyHz,
             0.01
         );
     }
