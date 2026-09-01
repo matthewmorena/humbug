@@ -15,14 +15,56 @@ public:
         double sampleRate
     ) const noexcept
     {
-        LearnedHumModel result {};
-
         const auto detection =
             detector.detect(
                 buffer,
                 channel,
                 sampleRate
             );
+
+        return createModel(
+            buffer,
+            channel,
+            sampleRate,
+            detection
+        );
+    }
+
+    LearnedHumModel analyzeNear(
+        const juce::AudioBuffer<float>& buffer,
+        int channel,
+        double sampleRate,
+        double referenceFrequencyHz,
+        double searchRadiusHz
+    ) const noexcept
+    {
+        const auto detection =
+            detector.detectNear(
+                buffer,
+                channel,
+                sampleRate,
+                referenceFrequencyHz,
+                searchRadiusHz
+            );
+
+        return createModel(
+            buffer,
+            channel,
+            sampleRate,
+            detection
+        );
+    }
+
+private:
+    LearnedHumModel createModel(
+        const juce::AudioBuffer<float>& buffer,
+        int channel,
+        double sampleRate,
+        const FundamentalFrequencyDetector::Result&
+            detection
+    ) const noexcept
+    {
+        LearnedHumModel result {};
 
         result.frequencyHz =
             detection.frequencyHz;
@@ -52,7 +94,6 @@ public:
         return result;
     }
 
-private:
     FundamentalFrequencyDetector detector;
     HumEstimator estimator;
 };

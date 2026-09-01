@@ -2,7 +2,7 @@
 
 > Adaptive mains hum removal for guitar.
 
-Humbug is a JUCE-based audio plugin that aims to remove 50/60 Hz mains hum from guitars—especially single-coil and P-90 pickups—using sinusoidal estimation and reconstruction rather than traditional notch filters or noise gates. Adaptive tracking is planned for a later stage of development.
+Humbug is a JUCE-based audio plugin that aims to remove 50/60 Hz mains hum from guitars—especially single-coil and P-90 pickups—using sinusoidal estimation, reconstruction, and adaptive tracking rather than traditional notch filters or noise gates.
 
 ## Vision
 
@@ -35,23 +35,35 @@ Build a transparent hum removal plugin suitable for both live monitoring and stu
   * [x] Run frequency detection and harmonic estimation off the audio thread
   * [x] Safely publish learned cancellation models to the audio thread
   * [x] Preserve phase alignment across analysis latency
-  * [x] Integrate fixed cancellation into the processor signal path
+  * [x] Integrate learned cancellation into the processor signal path
   * [x] Add processor-level integration coverage
   * [x] Add initial user-facing Learn control
-* [ ] Adaptive tracking
-  * [ ] Track frequency drift
-  * [ ] Continuously update amplitude and phase estimates
-  * [ ] Smooth parameter changes during live processing
+* [x] Adaptive tracking
+  * [x] Track gradual fundamental-frequency drift
+  * [x] Continuously update harmonic amplitude and phase estimates
+  * [x] Run periodic tracking analysis off the audio thread
+  * [x] Use narrow frequency searches around the most recently accepted model
+  * [x] Smoothly transition between tracked cancellation models
+  * [x] Integrate automatic tracking with manual Learn/relearn behavior
+  * [x] Add end-to-end and processor-level adaptive regression coverage
+* [ ] Adaptive tracking refinement
+  * [ ] Add confidence or consistency gating for contaminated tracking windows
+  * [ ] Improve perceptual smoothness of automatic model transitions
+  * [ ] Explore cancellation beyond the current eight-harmonic model
 * [ ] Stereo cancellation support
 * [ ] UI refinement
 * [ ] Beta testing
 
 ## Status
 
-Realtime Learn Mode with fixed harmonic cancellation is functional for mono processing.
+Realtime Learn Mode with adaptive harmonic cancellation is functional for mono processing.
 
-Humbug can capture an analysis window, detect mains hum on a background thread, estimate its harmonic structure, and activate phase-aligned cancellation without performing expensive analysis inside the realtime audio callback.
+Humbug can capture an initial analysis window, detect mains hum on a background thread, estimate its harmonic structure, and activate phase-aligned cancellation without performing expensive analysis inside the realtime audio callback.
 
-Initial DAW testing has shown strong cancellation of generated harmonic hum and meaningful reduction of real guitar hum. Because the learned cancellation model is currently fixed after activation, cancellation gradually loses effectiveness as the source frequency or harmonic characteristics drift over time.
+After a valid manual Learn, automatic tracking periodically captures new raw-input windows and updates the cancellation model as the hum changes. Tracking uses a narrow frequency search around the most recently accepted fundamental and crossfades between reconstructed models to avoid abrupt realtime model replacement.
 
-Adaptive tracking is the next major DSP milestone.
+Automated testing shows that adaptive tracking can maintain useful cancellation during gradual changes in fundamental frequency, harmonic amplitude, and harmonic phase, including in the presence of unrelated tonal content.
+
+Initial DAW testing with electric guitar has also shown effective adaptive cancellation across the currently modeled first eight harmonics while the instrument is idle. Current areas for further refinement include rejecting tracking updates contaminated by strong guitar playing, improving the perceptual smoothness of model transitions, and investigating higher-order harmonic cancellation.
+
+Stereo Learn and cancellation are not yet supported.
