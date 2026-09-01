@@ -7,10 +7,12 @@ The current realtime processor path is:
 ```text
 Input
   |
-  +----> Learn capture while collecting
+  +----> Manual Learn capture when requested
+  |
+  +----> Periodic tracking capture when active
   |
   v
-Fixed hum cancellation when active
+Adaptive hum cancellation when active
   |
   v
 Output gain
@@ -19,41 +21,52 @@ Output gain
 Output
 ```
 
-Learn analysis is deliberately separated from realtime cancellation.
+Manual Learn and adaptive tracking analysis are deliberately separated from realtime cancellation.
 
 ```text
-AUDIO THREAD
-
-raw input
-    |
-    v
-LearnModeController / LearnBuffer
-    |
-    | completed analysis window
-    v
-
-ANALYSIS WORKER
-
-HumAnalyzer
-    |
-    +--> FundamentalFrequencyDetector
-    |
-    +--> HumEstimator
-    |
-    v
-LearnedHumModel
-    |
-    v
-LearnedHumModelMailbox
-    |
-    v
-
-AUDIO THREAD
-
-consume result at block boundary
-    |
-    v
-FixedHumCanceller
+                         MANUAL LEARN
+                              |
+raw input --------------------+
+  |                           |
+  |                           v
+  |                    LearnModeController
+  |                           |
+  |                           v
+  |                    HumAnalysisWorker
+  |                           |
+  |                           v
+  |                       HumAnalyzer
+  |                           |
+  |                           v
+  |                 LearnedHumModelMailbox
+  |                           |
+  |                           |
+  |                    AUDIO THREAD
+  |                           |
+  |                           v
+  |                 authoritative model
+  |                           |
+  |                    starts / updates
+  |                      tracking prior
+  |                           |
+  +---------------------------+----------------------+
+  |                                                  |
+  v                                                  v
+HumTrackingController                         AdaptiveHumCanceller
+  |                                                  |
+  | periodic 250 ms capture                          |
+  v                                                  |
+HumTrackingWorker                                    |
+  |                                                  |
+  v                                                  |
+HumAnalyzer::analyzeNear()                           |
+  |                                                  |
+  v                                                  |
+LearnedHumModelMailbox                               |
+(tracking)                                           |
+  |                                                  |
+  +-------------------> AUDIO THREAD ----------------+
+                        model transition
 ```
 
 Synthetic hum generation remains a development and testing utility rather than part of the normal production signal path.
@@ -114,6 +127,16 @@ Hum is currently considered detected when:
 
 The result therefore separates **frequency estimation** from **hum detection**: a best-fit frequency may still be returned even when the evidence is not strong enough to classify the input as hum.
 
+For automatic adaptive tracking, the detector also supports a narrow search through `detectNear()`.
+
+Once manual Learn has established a reliable fundamental frequency, repeating the complete 48–52 Hz and 58–62 Hz search for every tracking update is unnecessarily expensive. Tracking therefore searches within a small region around the most recently accepted model: `reference frequency ± 0.3 Hz`.
+
+The narrow search uses the same 0.1 Hz coarse grid, residual-energy scoring, parabolic refinement, and hum-classification logic as the full search.
+
+Manual Learn continues to use the complete mains-frequency search because it cannot assume a prior frequency.
+
+Refinement eligibility is determined from the winning coarse-grid index rather than floating-point comparisons against the search boundaries. This avoids rounding errors near a boundary incorrectly preventing parabolic refinement.
+
 ### HumReconstructor
 
 Reconstructs the estimated hum waveform from the harmonic model produced by
@@ -138,16 +161,16 @@ reconstruction begins.
 
 ### FixedHumCanceller
 
-Owns the realtime fixed-cancellation path.
+Provides the original fixed-model cancellation implementation and remains
+useful as a regression baseline for measuring the benefit of adaptive tracking.
 
-`FixedHumCanceller` no longer performs frequency detection or harmonic estimation. It consumes an already-learned `LearnedHumModel` produced by the background analysis path.
+It is no longer the primary cancellation stage used by `PluginProcessor`.
+Production realtime cancellation now uses `AdaptiveHumCanceller`.
 
-Its responsibilities are:
-
-1. Accept a learned harmonic model and elapsed sample offset.
-2. Initialize `HumReconstructor` at the correct continuation phase.
-3. Subtract the reconstructed hum from subsequent realtime input samples.
-4. Remain in pass-through mode when no valid hum model is active.
+`FixedHumCanceller` consumes one already-learned `LearnedHumModel`, initializes
+a `HumReconstructor` at the requested continuation offset, and continues
+subtracting that unchanged model until another model is explicitly activated
+or the canceller is reset.
 
 Conceptual flow:
 
@@ -170,6 +193,43 @@ output sample
 Activating a model first clears the previous cancellation state. If the new Learn result is invalid or reports that no hum was detected, the canceller remains inactive and input passes through unchanged.
 
 Calling `reset()` also clears the active model and returns the canceller to pass-through behavior.
+
+### AdaptiveHumCanceller
+
+Owns the current production realtime cancellation path.
+
+`AdaptiveHumCanceller` maintains two `HumReconstructor` instances:
+
+- one reconstructing the currently active model
+- one used to prepare the next accepted tracking model
+
+Manual Learn activates a model immediately through `activateModel()`. Automatic
+tracking updates use `transitionToModel()` instead.
+
+When an automatic update is accepted, the new model is phase-continued to the
+current audio timeline and the estimated hum waveform is crossfaded from the
+old reconstructor to the new reconstructor over a short transition period.
+
+The current transition duration is: `20 ms`
+
+Conceptually:
+
+```text
+old model reconstruction ----\
+                              >---- crossfaded estimate ----> subtract
+new model reconstruction ----/
+```
+
+Crossfading reconstructed waveforms avoids directly interpolating wrapped
+phase values. At the end of the transition, the new reconstructor becomes the
+active one and continues from its existing oscillator state.
+
+Invalid or no-hum automatic updates are rejected without disturbing the
+currently active model.
+
+Manual Learn remains authoritative: activating a manual model replaces the
+current adaptive state directly rather than crossfading from an older
+automatically tracked model.
 
 ### LearnBuffer
 
@@ -214,17 +274,24 @@ DSP processing should avoid:
 * locks
 * UI access
 * unnecessary container resizing
-* expensive Learn Mode analysis directly inside the realtime audio callback
+* expensive manual Learn or adaptive tracking analysis directly inside the realtime audio callback
 
 Fixed-size arrays are preferred for the known maximum harmonic count.
 
-Learn Mode capture should use memory allocated ahead of time. Frequency
-detection and least-squares model fitting are substantially more expensive than
-sample-by-sample reconstruction and subtraction and should eventually be
-performed outside the realtime audio callback.
+Frequency detection and least-squares model fitting are substantially more
+expensive than sample-by-sample reconstruction and subtraction and are
+therefore performed exclusively by background analysis workers.
 
-The realtime processing path should consume an already-learned cancellation
-model rather than perform model search or fitting for every block.
+The realtime audio callback is responsible only for:
+
+- raw analysis-window capture into preallocated storage
+- consuming completed fixed-size model results at block boundaries
+- deciding whether automatic results are current and acceptable
+- activating or transitioning realtime reconstruction models
+- sample-by-sample hum subtraction
+
+Neither manual Learn nor automatic tracking performs model fitting directly on
+the audio thread.
 
 ## Parameters and State
 
@@ -236,11 +303,22 @@ as a development/testing mechanism.
 
 ### HumAnalyzer
 
-Coordinates the non-realtime analysis of a completed Learn window.
+Coordinates non-realtime analysis of completed manual Learn and adaptive
+tracking windows.
 
-`HumAnalyzer` first runs `FundamentalFrequencyDetector`. If the analysis is valid and convincing hum is detected, it then runs `HumEstimator` at the detected fundamental frequency and produces a `LearnedHumModel`.
+For initial Learn, `analyze()` runs the full `FundamentalFrequencyDetector`
+search across the expected 50 Hz and 60 Hz mains regions.
 
-The analyzer is designed to run outside the realtime audio callback.
+For automatic tracking, `analyzeNear()` instead receives a reference
+fundamental frequency and searches within a narrow range around that value.
+
+After frequency detection, both paths use the same model-building process. If
+the detection result is valid and convincing hum is present, `HumEstimator`
+fits the harmonic amplitudes and phases at the detected fundamental and
+produces a `LearnedHumModel`.
+
+The analyzer is designed exclusively for background-thread use and does not
+run inside the realtime audio callback.
 
 ### LearnModeController
 
@@ -282,6 +360,110 @@ The worker is the producer and the audio thread is the consumer.
 
 The mailbox uses atomic state transitions rather than locks or dynamic allocation. A result must be consumed before another result can be published.
 
+`PluginProcessor` currently owns separate mailbox instances for manual Learn results and automatic tracking results so the two asynchronous analysis paths can remain independent.
+
+### HumTrackingController
+
+Coordinates recurring raw-input capture for automatic adaptive tracking.
+
+Tracking is inactive until a valid manual Learn establishes the first
+authoritative hum model.
+
+The current lifecycle is:
+
+```text
+Inactive
+   ↓
+Waiting
+   ↓
+Collecting
+   ↓
+ReadyForAnalysis
+   ↓
+Analyzing
+   ↓
+ModelReady
+   ↓
+Waiting
+```
+
+The nominal tracking cadence is one new capture start per second.
+
+Only one tracking operation may be outstanding at a time. If analysis or model
+handoff extends beyond the next nominal capture time, no overlapping capture is
+started. Once the outstanding operation is handed off, an overdue capture may
+begin at the next eligible host-block boundary.
+
+Each capture reuses the same 250 ms LearnBuffer design used by manual Learn.
+
+The controller also stores the reference fundamental used for the next
+tracking search. When a capture begins, that frequency is snapshotted for the
+lifetime of the analysis window. A later manual Learn or accepted tracking
+model may change the next reference frequency without changing the prior used
+by an already-captured window.
+
+Tracking can be requested to stop while work is outstanding. If the controller
+is merely waiting, it becomes inactive immediately. If capture, analysis, or
+model handoff is already in progress, that operation is allowed to drain before
+the controller transitions to `Inactive`.
+
+### HumTrackingWorker
+
+Runs periodic tracking analysis on a dedicated background `juce::Thread`.
+
+When `HumTrackingController` exposes a completed window, the worker claims the
+frozen buffer and reads the reference frequency that was snapshotted when that
+capture began.
+
+Unlike initial Learn analysis, tracking uses:
+
+```text
+HumAnalyzer::analyzeNear(
+    referenceFrequencyHz,
+    ±0.3 Hz
+)
+```
+
+This avoids repeating the complete mains-frequency search for every update.
+
+The resulting `PendingLearnResult` contains both the learned model and the
+absolute sample position at which the tracking analysis window began. It is
+published through a dedicated `LearnedHumModelMailbox`.
+
+The worker never activates or transitions the realtime canceller directly.
+Model acceptance remains owned by the audio thread.
+
+### Manual Learn and Adaptive Tracking Interaction
+
+Manual Learn is authoritative over automatic tracking.
+
+When a valid manual Learn model is consumed:
+
+1. The model is activated immediately in `AdaptiveHumCanceller`.
+2. Its fundamental becomes the reference frequency for future tracking.
+3. Automatic tracking is started or kept active.
+4. The manual activation sample becomes the minimum acceptable start time for
+   future tracking results.
+
+A tracking result is accepted only when its analysis window began at or after
+the most recent authoritative manual activation. This prevents an older
+tracking operation from completing late and overwriting a newer manual Learn.
+
+When a manual Learn completes without detecting hum:
+
+1. Adaptive cancellation becomes inactive.
+2. Automatic tracking is requested to stop.
+3. Any already-outstanding tracking work is allowed to drain safely.
+4. Its result is ignored rather than allowing stale cancellation to return.
+
+Automatic tracking updates are advisory rather than authoritative. Invalid,
+no-hum, stale, or otherwise unaccepted tracking models leave the currently
+active cancellation model unchanged.
+
+When a valid tracking model is successfully transitioned into the realtime
+canceller, its fundamental becomes the reference frequency used for the next
+tracking capture.
+
 ### Realtime Learn Mode
 
 User Learn requests are submitted through an atomic request flag.
@@ -312,25 +494,41 @@ The offset includes:
 * audio processed while the worker performs analysis
 * any additional block-boundary delay before activation
 
-The model is activated only on the audio thread.
+The manual model is activated in `AdaptiveHumCanceller` only on the audio
+thread. A valid manual Learn also establishes the reference frequency used by
+subsequent automatic tracking.
 
 ### Thread Ownership
 
 The current ownership rules are:
 
-* the audio thread writes the Learn buffer while collecting
-* the analysis buffer is frozen after capture completes
-* the worker receives read-only access while analyzing
-* the worker publishes only a fixed-size learned result
-* the audio thread owns cancellation-model activation
-* the editor communicates with the processor through thread-safe request/status APIs rather than accessing Learn DSP state directly
+- the audio thread writes manual Learn and tracking buffers while collecting
+- completed analysis buffers are frozen before background workers receive them
+- each worker receives read-only access to its claimed analysis window
+- workers publish only fixed-size `PendingLearnResult` values through their
+  mailboxes
+- the audio thread owns all cancellation-model activation and transition
+- the audio thread owns decisions about whether tracking results are stale or
+  otherwise acceptable
+- tracking reference frequencies are updated by the audio thread and
+  snapshotted when a tracking capture begins
+- the editor communicates with the processor through thread-safe request and
+  status APIs rather than accessing analysis or cancellation state directly
 
 ### Channel Policy
 
-Realtime Learn and fixed cancellation are currently supported only for mono processing.
+Realtime Learn, adaptive tracking, and cancellation are currently supported
+only for mono processing.
 
-`FixedHumCanceller` owns one reconstruction timeline. Calling the same canceller sequentially for multiple channels would advance that timeline more than once per sample frame and break phase alignment.
+The current adaptive cancellation architecture maintains a single
+sample-by-sample reconstruction timeline. Processing multiple channels
+sequentially through the same reconstruction state would advance oscillator
+phase more than once per sample frame and break alignment.
 
-Stereo cancellation therefore requires an explicit multi-channel design and is intentionally deferred rather than being handled implicitly.
+Manual Learn and automatic tracking also currently analyze one channel only.
+
+Stereo adaptive cancellation therefore requires an explicit multi-channel
+design and remains intentionally deferred rather than being handled
+implicitly.
 
 The current user-facing Learn control is disabled for stereo instances.

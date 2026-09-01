@@ -495,3 +495,55 @@ This provides the first real-world evidence motivating the upcoming adaptive-tra
 ### Next
 
 Document the completed Realtime Learn Mode milestone and begin designing adaptive tracking for gradual frequency, amplitude, and phase changes.
+
+## 8/29/26 — Adaptive Tracking Foundation
+
+Began work on the adaptive tracking milestone, with the goal of allowing Humbug to continuously follow slow changes in hum frequency, amplitude, and phase after the initial Learn operation.
+
+Started by adding regression coverage for the limitations of the existing fixed model. A controlled 60.0 → 60.2 Hz drift over five seconds showed cancellation degrading from roughly -46 dB shortly after Learn to about +5 dB near the end of the drift. Additional tests confirmed that the existing `HumAnalyzer` can accurately follow slow frequency changes across periodic 250 ms analysis windows and that models captured later on the absolute sample timeline remain phase-correct when activated after an arbitrary delay.
+
+Implemented `HumTrackingController` to manage recurring raw-input analysis windows. Tracking currently uses a one-second cadence, captures 250 ms windows across arbitrary host block boundaries, preserves host-block overshoot in the absolute timeline, and allows only one tracking operation to remain outstanding at a time. Added lifecycle coverage for capture timing, analysis handoff, recurring operation, and prevention of overlapping tracking work.
+
+Added `HumTrackingWorker`, reusing the existing asynchronous analysis architecture. The worker claims frozen tracking windows, runs `HumAnalyzer` off the audio thread, and publishes timestamped model updates through the lock-free mailbox before exposing the result as ready. Tests verify both individual tracking updates and successive updates as the source frequency changes.
+
+Implemented `AdaptiveHumCanceller` as a separate realtime component rather than expanding `FixedHumCanceller`. It maintains two `HumReconstructor` instances and crossfades between the active and newly tracked models over a short transition period. This avoids direct interpolation of wrapped phase values while preserving continuous oscillator state. Added regressions for exact inactive pass-through, smooth model transitions, and rejection of invalid/no-hum updates without disturbing the active reconstruction.
+
+Built end-to-end adaptive tracking tests using the new controller, worker, mailbox, and canceller. With a 60.0 → 60.2 Hz drift, the fixed model degraded to approximately +5.1 dB late in the test, while adaptive tracking maintained roughly -20.3 dB attenuation. Similar performance was retained with an unrelated 997 Hz desired tone present.
+
+Expanded adaptive coverage to changes in the full harmonic model. Periodic tracking improved cancellation during harmonic amplitude evolution from roughly -5.9 dB with the stale fixed model to -22.3 dB adaptively. A controlled harmonic phase change produced near-numerical-floor cancellation after a post-change tracking update. A combined stress test incorporating frequency drift, evolving harmonic amplitudes, a phase change, and a 997 Hz desired tone produced approximately +5.9 dB with fixed cancellation versus -17.1 dB with adaptive tracking.
+
+At this point, the isolated adaptive DSP architecture has regression coverage for frequency, amplitude, and phase changes, desired-signal interference, asynchronous model publication, absolute-timeline activation, and smooth realtime transitions. The next step is integrating the adaptive tracking lifecycle into `PluginProcessor`, including defining how automatic tracking interacts with manual Learn/relearn operations.
+
+## 8/30/26 — Adaptive Tracking Processor Integration
+
+Integrated the adaptive tracking architecture into the realtime `PluginProcessor` path. Replaced the fixed cancellation stage with `AdaptiveHumCanceller`, added the tracking controller, mailbox, and background worker to the processor lifecycle, and began advancing the tracking timeline from raw input alongside the existing manual Learn path.
+
+Defined the interaction between manual Learn and automatic tracking. A valid manual Learn now immediately activates an authoritative model and starts adaptive tracking, while a no-hum relearn disables cancellation and requests tracking to stop. Tracking operations that are already in progress are allowed to drain safely, and stale tracking results whose analysis windows began before a newer manual Learn activation are rejected so they cannot overwrite the fresh model. Additional controller lifecycle coverage verifies immediate stopping while idle, deferred stopping while work is outstanding, aborted-analysis handling, and clean restart behavior after a newer valid Learn.
+
+Optimized automatic tracking analysis to avoid repeating the full mains-frequency search after every update. Added `FundamentalFrequencyDetector::detectNear()` and `HumAnalyzer::analyzeNear()`, allowing tracking to search within a narrow range around the most recently accepted fundamental rather than scanning both the full 48–52 Hz and 58–62 Hz regions. While adding the narrow search, fixed a frequency-refinement edge case where floating-point comparisons near a search-range boundary could incorrectly prevent parabolic refinement. The detector now determines refinement eligibility from the winning coarse-grid index instead.
+
+Extended `HumTrackingController` to maintain the reference frequency used for future tracking captures and snapshot that value when each analysis window begins. This ensures an in-progress capture continues using the frequency prior that was current at capture time even if a manual relearn changes the authoritative model before the worker claims the buffer. `HumTrackingWorker` now uses this snapshotted reference with a ±0.3 Hz search radius, and accepted automatic models become the reference for the next tracking window.
+
+Added a processor-level adaptive drift regression exercising the complete production path: manual Learn, automatic tracking startup, asynchronous periodic analysis, model publication, adaptive crossfades, and continued cancellation while the source drifts from 60.0 Hz to 60.2 Hz over five seconds. The initial full-search implementation exposed a major realtime latency problem, with the first tracking result arriving roughly 145,000 samples, or about 3 seconds, after its analysis window began and late cancellation degrading to approximately +4 dB.
+
+After switching tracking to the narrow frequency search, analysis-to-activation latency fell to roughly 29,000 samples, or about 0.6 seconds. Four tracking updates were applied during the same five-second drift, following the source through approximately 60.045, 60.084, 60.125, and 60.165 Hz. Late cancellation improved to approximately -20 dB, closely matching the behavior previously demonstrated by the isolated adaptive tracking tests.
+
+At this point, adaptive tracking is integrated through the actual plugin processing path with regression coverage for manual Learn interaction, automatic update lifecycle, stale-result rejection, low-latency narrow analysis, and continued cancellation during gradual mains-frequency drift.
+
+## 8/31/26 — DAW Validation and Adaptive Tracking Follow-Up
+
+Tested the completed adaptive tracking path in a DAW using a real guitar signal. With the guitar idling, Humbug was able to learn and continuously suppress the mains hum effectively across the first eight modeled harmonics, confirming that the adaptive tracking architecture also behaves reasonably outside the synthetic test harness.
+
+Real-world testing also exposed several limitations that are not yet represented fully by the current regression suite. Tracking updates can occasionally cause an audible change in the level of the remaining hum as the plugin transitions between models. The existing short model crossfade prevents obvious discontinuities, but additional work may be needed to make updates perceptually smoother when successive estimates differ significantly in amplitude or phase.
+
+A more noticeable issue occurs when strong guitar playing overlaps a tracking capture. Loud strumming and other multi-harmonic musical content can interfere with the hum estimate, causing cancellation quality to temporarily degrade once the guitar stops. The hum then returns briefly until a later tracking window produces a cleaner model. This suggests that automatic tracking will eventually benefit from stronger confidence checks or update gating so that heavily contaminated analysis windows can be rejected rather than immediately replacing a reliable existing model.
+
+Testing also confirmed that significant higher-frequency hum harmonics can remain above the current eight-harmonic modeling limit. Extending the number of modeled harmonics is a relatively direct future enhancement, although additional safeguards will likely be necessary because higher harmonics increasingly overlap with musically important guitar frequencies and may be more susceptible to desired-signal interference.
+
+Despite these limitations, the current implementation appears functional enough for the adaptive tracking milestone. The core system successfully performs an initial manual Learn, follows gradual changes in the hum model automatically, and maintains useful cancellation during normal idle conditions. The remaining issues are better treated as follow-up improvements rather than blockers for the current pull request.
+
+### Future Work
+
+* Add confidence or consistency checks before accepting automatic tracking updates, especially when analysis windows contain strong desired-signal energy.
+* Investigate smoother model transitions, including longer crossfades or gradual per-harmonic amplitude/phase changes.
+* Explore extending harmonic modeling beyond the current eight harmonics while limiting interference with desired musical content.
